@@ -238,7 +238,7 @@ export function useRtcCallMode({ activeBotName, activeSessionId, token, messages
 
     try {
       const sdk = await loadRtcSdk();
-      const VERTC = sdk.default;
+      const VERTC = sdk.default as any;
 
       const info: RtcSessionInfo = {
         sessionId: incoming.sessionId,
@@ -308,7 +308,7 @@ export function useRtcCallMode({ activeBotName, activeSessionId, token, messages
 
     try {
       const sdk = await loadRtcSdk();
-      const VERTC = sdk.default;
+      const VERTC = sdk.default as any;
 
       // Call server to create RTC room + AI agent
       const params: Record<string, string> = {};
