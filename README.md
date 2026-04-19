@@ -156,11 +156,10 @@ MetaBot 支持在单个进程中运行多个 Bot，每个 Bot 有独立的工作
       "defaultWorkingDirectory": "C:\\Users\\你的用户名"
     }
   ],
-  "telegramBots": [
+  "wechatBots": [
     {
-      "name": "tg-bot",
-      "telegramBotToken": "123456:ABC...",
-      "defaultWorkingDirectory": "/home/user/project"
+      "name": "wechat-assistant",
+      "defaultWorkingDirectory": "C:\\Users\\你的用户名"
     }
   ]
 }
@@ -172,8 +171,9 @@ MetaBot 支持在单个进程中运行多个 Bot，每个 Bot 有独立的工作
 |------|----------|----------|
 | 开发助手 | `ClaudeBot` | `D:\workspace` — 代码项目 |
 | 个人助手 | `日常Bot` | `C:\Users\你的用户名` — 文档、日常 |
-| Telegram Bot | `tg-bot` | `/home/user/project` — 海外项目 |
 | 微信 Bot | `wechat-assistant` | `C:\Users\你的用户名` — 微信 |
+
+微信接入：运行 `npx -y @larksuite/openclaw-lark install`，按提示选择「新建微信机器人」，手机微信扫码授权。详见 [微信接入指南（手动模式）](https://xvirobotics.com/metabot/zh/features/wechat/)。
 
 会话隔离：每个 Bot 的每个聊天（chatId）有独立的 Claude 会话和工作目录，互不干扰。不同 Bot 之间通过 Agent 总线（`mb talk`）互相委派任务。
 
