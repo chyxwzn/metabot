@@ -119,7 +119,15 @@ MetaBot 支持 4 种方式与你的 Agent 团队交互：
 
 ### 飞书
 
-1. [open.feishu.cn](https://open.feishu.cn/) 创建应用 → 添加「机器人」能力
+**方式一：快速创建（推荐）**
+
+1. 运行 `npx -y @larksuite/openclaw-lark install`，按提示选择「新建机器人」，用手机飞书扫码授权
+2. 登录 [open.feishu.cn](https://open.feishu.cn/) → 在应用列表中找到刚创建的应用 → 复制 **App ID** 和 **App Secret**
+3. 写入 `bots.json`（见下方多 Bot 配置）
+
+**方式二：手动创建**
+
+1. 登录 [open.feishu.cn](https://open.feishu.cn/) → 创建应用 → 添加「机器人」能力
 2. 开通权限：`im:message`、`im:message:readonly`、`im:resource`、`im:chat:readonly`
 3. 先启动 MetaBot，再开启「长连接」+ `im.message.receive_v1` 事件
 4. 发布应用
@@ -127,6 +135,47 @@ MetaBot 支持 4 种方式与你的 Agent 团队交互：
 > 不需要公网 IP。飞书用 WebSocket，Telegram 和微信用长轮询。
 
 **Web UI**：启动 MetaBot 后访问 `http://localhost:9100/web/`，输入 API_SECRET 即可使用。
+
+## 多 Bot 配置
+
+MetaBot 支持在单个进程中运行多个 Bot，每个 Bot 有独立的工作目录和对话历史。通过 `bots.json` 配置：
+
+```json
+{
+  "feishuBots": [
+    {
+      "name": "ClaudeBot",
+      "feishuAppId": "cli_xxx",
+      "feishuAppSecret": "...",
+      "defaultWorkingDirectory": "D:\\workspace"
+    },
+    {
+      "name": "日常Bot",
+      "feishuAppId": "cli_yyy",
+      "feishuAppSecret": "...",
+      "defaultWorkingDirectory": "C:\\Users\\你的用户名"
+    }
+  ],
+  "telegramBots": [
+    {
+      "name": "tg-bot",
+      "telegramBotToken": "123456:ABC...",
+      "defaultWorkingDirectory": "/home/user/project"
+    }
+  ]
+}
+```
+
+**多 Bot 场景示例**：
+
+| 场景 | Bot 名称 | 工作目录 |
+|------|----------|----------|
+| 开发助手 | `ClaudeBot` | `D:\workspace` — 代码项目 |
+| 个人助手 | `日常Bot` | `C:\Users\你的用户名` — 文档、日常 |
+| Telegram Bot | `tg-bot` | `/home/user/project` — 海外项目 |
+| 微信 Bot | `wechat-assistant` | `C:\Users\你的用户名` — 微信 |
+
+会话隔离：每个 Bot 的每个聊天（chatId）有独立的 Claude 会话和工作目录，互不干扰。不同 Bot 之间通过 Agent 总线（`mb talk`）互相委派任务。
 
 ## 示例 Prompt
 
@@ -214,6 +263,10 @@ MetaBot 支持 4 种方式与你的 Agent 团队交互：
 </details>
 
 ## 配置
+
+**单 Bot 模式**：直接配置 `.env` 中的 `FEISHU_APP_ID` / `FEISHU_APP_SECRET`（默认）。
+
+**多 Bot 模式**：设置 `BOTS_CONFIG=./bots.json` 以在单进程中运行多个 Bot，每个 Bot 独立认证和工作目录。会话完全隔离。
 
 **`bots.json`** — 定义你的 Bot：
 
