@@ -266,25 +266,7 @@ MetaBot 支持在单个进程中运行多个 Bot，每个 Bot 有独立的工作
 
 **单 Bot 模式**：直接配置 `.env` 中的 `FEISHU_APP_ID` / `FEISHU_APP_SECRET`（默认）。
 
-**多 Bot 模式**：设置 `BOTS_CONFIG=./bots.json` 以在单进程中运行多个 Bot，每个 Bot 独立认证和工作目录。会话完全隔离。
-
-**`bots.json`** — 定义你的 Bot：
-
-```json
-{
-  "feishuBots": [{
-    "name": "metabot",
-    "feishuAppId": "cli_xxx",
-    "feishuAppSecret": "...",
-    "defaultWorkingDirectory": "/home/user/project"
-  }],
-  "telegramBots": [{
-    "name": "tg-bot",
-    "telegramBotToken": "123456:ABC...",
-    "defaultWorkingDirectory": "/home/user/project"
-  }]
-}
-```
+**多 Bot 模式**：设置 `BOTS_CONFIG=./bots.json` 以在单进程中运行多个 Bot，每个 Bot 独立认证和工作目录。会话完全隔离。详见上方「多 Bot 配置」章节。
 
 <details>
 <summary><strong>所有 Bot 配置字段</strong></summary>
@@ -294,7 +276,6 @@ MetaBot 支持在单个进程中运行多个 Bot，每个 Bot 有独立的工作
 | `name` | 是 | — | Bot 标识名 |
 | `defaultWorkingDirectory` | 是 | — | Claude 的工作目录 |
 | `feishuAppId` / `feishuAppSecret` | 飞书 | — | 飞书应用凭证 |
-| `telegramBotToken` | Telegram | — | Telegram Bot Token |
 | `wechatBotToken` | 微信(可选) | — | 预认证 iLink token（不填则 QR 登录） |
 | `maxTurns` / `maxBudgetUsd` | 否 | 不限 | 执行限制 |
 | `model` | 否 | SDK 默认 | Claude 模型 |
