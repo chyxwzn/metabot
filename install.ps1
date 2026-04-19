@@ -609,9 +609,22 @@ if ($HasBash) {
                 (Get-Content $scriptPath -Raw) -replace '9100', $ApiPort | Set-Content $scriptPath -NoNewline
             }
 
-            # Create .cmd wrapper: @bash "%~dp0mm" %*
-            $cmdContent = "@bash `"%~dp0$cli`" %*"
-            $cmdContent | Out-File -FilePath (Join-Path $LocalBin "$cli.cmd") -Encoding ascii -NoNewline
+            # Create .cmd wrapper for Windows (calls Node.js version of mb/mb.js)
+            if ($cli -eq "mb" -or $cli -eq "mm") {
+                # Copy Node.js implementation alongside bash script
+                $jsName = if ($cli -eq "mb") { "mb.js" } else { "mm.js" }
+                $srcJs = Join-Path $MetabotHome "bin\$jsName"
+                if (Test-Path $srcJs) {
+                    Copy-Item $srcJs (Join-Path $LocalBin $jsName) -Force
+                }
+                # .cmd wrapper calls node directly (no bash needed)
+                $cmdContent = "@echo off`nnode ""%~dp0$jsName"" %*"
+                $cmdContent | Out-File -FilePath (Join-Path $LocalBin "$cli.cmd") -Encoding ascii -NoNewline
+            } else {
+                # metabot, fd use bash - convert Windows path to Unix path
+                $cmdContent = "@echo off`nfor /f ""tokens=*"" %%i in ('powershell -NoProfile -Command ""`$p=`$env:USERPROFILE+'\\.local\\bin\\$cli';`$p=`$p -replace ""\\\\"" ,""/"";`$p=`$p -replace ""C:"" ,""/c"";Write-Host `$p""') do set ""BASH_PATH=%%i""`nendlocal & bash ""%BASH_PATH%"" %*"
+                $cmdContent | Out-File -FilePath (Join-Path $LocalBin "$cli.cmd") -Encoding ascii -NoNewline
+            }
         }
     }
 
