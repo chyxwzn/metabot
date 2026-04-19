@@ -316,6 +316,8 @@ MetaBot 以 `bypassPermissions` 模式运行 Claude Code — 无交互式确认�
 | `/stop` | 中止当前任务 |
 | `/status` | 查看会话状态（含当前模型） |
 | `/model` | 查看当前模型；`/model list` 查看可用模型；`/model <name>` 切换；`/model reset` 恢复默认 |
+| `/sessions` | 列出最近会话 |
+| `/switch [N]` | 切换到指定会话（无参数时进入选择模式） |
 | `/memory list` | 浏览知识库目录 |
 | `/memory search 关键词` | 搜索知识库 |
 | `/sync` | 同步 MetaMemory 到飞书知识库 |
@@ -409,13 +411,69 @@ npm run dev
 
 </details>
 
+## Windows 后台服务（NSSM）
+
+在 Windows 上推荐用 [NSSM](https://nssm.cc/) 将 MetaBot 注册为后台服务，开机自启、进程崩溃自动重启。
+
+### 1. 下载 NSSM
+
+从 https://nssm.cc/download 下载最新版，解压后将 `win64/nssm.exe` 放到 PATH 中（如 `C:\Windows`），或记住完整路径。
+
+### 2. 安装服务
+
+**以管理员身份**打开 PowerShell 或命令提示符，执行：
+
+```powershell
+# 替换为你的实际路径
+$NODE = "C:\Program Files\nodejs\node.exe"
+$APP = "C:\Users\你的用户名\metabot\dist\index.js"
+$WORKDIR = "C:\Users\你的用户名\metabot"
+
+nssm install MetaBot $NODE $APP
+nssm set MetaBot AppDirectory $WORKDIR
+nssm start MetaBot
+```
+
+### 3. 管理服务
+
+```powershell
+# 查看状态
+nssm status MetaBot
+
+# 查看/编辑日志（弹出配置窗口）
+nssm edit MetaBot
+
+# 停止服务
+nssm stop MetaBot
+
+# 重启服务
+nssm restart MetaBot
+
+# 删除服务
+nssm remove MetaBot
+```
+
+### 4. 验证
+
+```powershell
+# 检查端口是否在监听
+netstat -ano | findstr ":9100"
+
+# 检查服务状态
+nssm status MetaBot
+```
+
+访问 `http://localhost:9100/web/` 确认 Web UI 可用。
+
+---
+
 ## 开发
 
 ```bash
 npm run dev          # 热重载开发服务器（tsx）
 npm test             # 运行测试（vitest）
 npm run lint         # ESLint 检查
-npm run build        # TypeScript 编译
+npm run build        # TypeScript 编译 + 构建 Web 前端
 ```
 
 ## Roadmap
