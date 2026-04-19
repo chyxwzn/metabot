@@ -24,6 +24,18 @@ function resolveClaudePath(): string {
 
 const CLAUDE_EXECUTABLE = resolveClaudePath();
 
+/** Load enabledPlugins from ~/.claude/settings.json */
+function loadEnabledPlugins(): Record<string, boolean> {
+  try {
+    const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+    if (!fs.existsSync(settingsPath)) return {};
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    return settings.enabledPlugins || {};
+  } catch {
+    return {};
+  }
+}
+
 /**
  * Env var prefixes to always strip from the inherited process environment.
  * CLAUDE*: prevents "nested session" errors from the SDK.
@@ -189,6 +201,7 @@ export class ClaudeExecutor {
       spawnClaudeCodeProcess: createSpawnFn(this.config.claude.apiKey),
       executableArgs: [path.join(path.dirname(fileURLToPath(import.meta.resolve('@anthropic-ai/claude-agent-sdk'))), 'cli.js')],
       pathToClaudeCodeExecutable: CLAUDE_EXECUTABLE,
+      enabledPlugins: loadEnabledPlugins(),
     };
 
     // Build system prompt appendix from sections
