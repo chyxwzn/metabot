@@ -111,11 +111,11 @@ MetaBot 支持 4 种方式与你的 Agent 团队交互：
 1. 找 [@BotFather](https://t.me/BotFather) → `/newbot` → 复制 token
 2. 写入 `bots.json` → 完成（长轮询，无需 Webhook）
 
-### 微信（灰测中）
+### 微信
 
-1. iPhone 微信 8.0.70+ → 设置 → 插件 → 开启 **ClawBot**
-2. 运行 `install.sh`，选 `3) WeChat ClawBot` — 扫码绑定
-3. 详见 [微信接入指南](https://xvirobotics.com/metabot/zh/features/wechat/)
+1. 在 `bots.json` 中配置 `wechatBots`（见上方多 Bot 配置）
+2. 启动 MetaBot，控制台输出微信扫码链接，点击链接或扫描二维码，用手机微信授权
+3. 详见 [微信接入指南（手动模式）](https://xvirobotics.com/metabot/zh/features/wechat/)
 
 ### 飞书
 
@@ -173,7 +173,7 @@ MetaBot 支持在单个进程中运行多个 Bot，每个 Bot 有独立的工作
 | 个人助手 | `日常Bot` | `C:\Users\你的用户名` — 文档、日常 |
 | 微信 Bot | `wechat-assistant` | `C:\Users\你的用户名` — 微信 |
 
-微信接入：运行 `npx -y @larksuite/openclaw-lark install`，按提示选择「新建微信机器人」，手机微信扫码授权。详见 [微信接入指南（手动模式）](https://xvirobotics.com/metabot/zh/features/wechat/)。
+微信接入：启动 MetaBot 后，控制台会输出微信扫码链接（如 `https://liteapp.weixin.qq.com/q/...?qrcode=...`），点击链接或扫描二维码，用手机微信授权。详见 [微信接入指南](https://xvirobotics.com/metabot/zh/features/wechat/)。
 
 会话隔离：每个 Bot 的每个聊天（chatId）有独立的 Claude 会话和工作目录，互不干扰。不同 Bot 之间通过 Agent 总线（`mb talk`）互相委派任务。
 
