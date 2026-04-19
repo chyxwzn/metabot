@@ -229,7 +229,6 @@ export class SessionManager {
                 cumulativeDurationMs: s.cumulativeDurationMs,
                 model: s.model,
                 title: s.title,
-            model: (s as any).model,
               })),
           };
         }
@@ -247,6 +246,8 @@ export class SessionManager {
       const data = JSON.parse(raw) as Record<string, unknown>;
       const now = Date.now();
       let loaded = 0;
+
+      for (const [chatId, value] of Object.entries(data)) {
         // 新格式：有 activeIndex 和 sessions 数组
         if (value && typeof value === 'object' && 'sessions' in value && Array.isArray((value as any).sessions)) {
           const persisted = value as PersistedSessionGroup;
@@ -282,6 +283,7 @@ export class SessionManager {
               cumulativeTokens: old.cumulativeTokens ?? 0,
               cumulativeCostUsd: old.cumulativeCostUsd ?? 0,
               cumulativeDurationMs: old.cumulativeDurationMs ?? 0,
+              model: old.model,
             }],
           });
           loaded++;
