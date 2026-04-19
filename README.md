@@ -465,6 +465,12 @@ $WORKDIR = "C:\Users\你的用户名\metabot"
 
 nssm install MetaBot $NODE $APP
 nssm set MetaBot AppDirectory $WORKDIR
+
+# 配置日志文件重定向
+New-Item -ItemType Directory -Force -Path "$WORKDIR\logs" | Out-Null
+nssm set MetaBot AppStdout "$WORKDIR\logs\metabot.log"
+nssm set MetaBot AppStderr "$WORKDIR\logs\metabot.log"
+
 nssm start MetaBot
 ```
 

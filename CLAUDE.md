@@ -15,6 +15,21 @@ npm run build:web    # Build web frontend only (Vite → dist/web/)
 npm start            # Run compiled output (dist/index.js)
 ```
 
+### Windows Service Management (NSSM)
+
+On Windows, the service is managed with **NSSM** (Non-Sucking Service Manager), not PM2.
+
+```bash
+# Restart the service after build
+nssm restart metabot
+
+# View logs
+metabot logs
+
+# Check status
+nssm status metabot
+```
+
 ```bash
 npm test             # Run tests (vitest)
 npm run lint         # ESLint check

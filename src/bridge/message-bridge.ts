@@ -1419,46 +1419,8 @@ export class MessageBridge {
   }
 
   private async sendCompletionNotice(chatId: string, state: CardState, durationMs: number): Promise<void> {
-    // Some senders (WeChat) already send the final response as a standalone message, so skip
-    if (this.sender.skipCompletionNotice) return;
-    // Only notify for tasks that took a while — quick tasks don't need it
-    if (durationMs < 10_000) return;
-
-    const statusEmoji = state.status === 'complete' ? '✅' : '❌';
-    const durationStr = durationMs >= 60_000
-      ? `${(durationMs / 60_000).toFixed(1)}min`
-      : `${(durationMs / 1000).toFixed(0)}s`;
-    const costStr = state.sessionCostUsd ? ` · $${state.sessionCostUsd.toFixed(2)}` : (state.costUsd ? ` · $${state.costUsd.toFixed(2)}` : '');
-    const statusWord = state.status === 'complete' ? 'Done' : 'Failed';
-
-    // Model display name: strip "claude-" prefix for brevity (e.g. "opus-4-7")
-    const modelStr = state.model
-      ? ` · ${state.model.replace(/^claude-/, '')}`
-      : '';
-
-    // Context usage: show totalTokens / contextWindow as percentage
-    let usageStr = '';
-    if (state.totalTokens && state.contextWindow) {
-      const pct = Math.round((state.totalTokens / state.contextWindow) * 100);
-      const tokensK = state.totalTokens >= 1000
-        ? `${(state.totalTokens / 1000).toFixed(1)}k`
-        : `${state.totalTokens}`;
-      const ctxK = `${Math.round(state.contextWindow / 1000)}k`;
-      usageStr = ` · ${tokensK}/${ctxK} (${pct}%)`;
-    } else if (state.totalTokens) {
-      const tokensK = state.totalTokens >= 1000
-        ? `${(state.totalTokens / 1000).toFixed(1)}k`
-        : `${state.totalTokens}`;
-      usageStr = ` · ${tokensK} tokens`;
-    }
-
-    const message = `${statusEmoji} ${statusWord} (${durationStr}${costStr}${modelStr}${usageStr})`;
-
-    try {
-      await this.sender.sendText(chatId, message);
-    } catch (err) {
-      this.logger.warn({ err, chatId }, 'Failed to send completion notice');
-    }
+    // Card already shows completion stats (duration, cost, model, usage), so skip
+    // sending duplicate text notification like "✅ Done (1.2min · $0.05 · opus-4-7)"
   }
 
   destroy(): void {
