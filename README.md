@@ -1,29 +1,125 @@
-# MetaBot
+<div align="center">
 
-**在飞书 / Telegram / 微信上用手机控制 Claude Code — 写代码、管 Agent、自动化一切。**
+# 🤖 MetaBot
 
-[![CI](https://img.shields.io/github/actions/workflow/status/xvirobotics/metabot/ci.yml?branch=main&style=flat-square)](https://github.com/xvirobotics/metabot/actions)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](https://opensource.org/licenses/MIT)
-[![GitHub stars](https://img.shields.io/github/stars/xvirobotics/metabot?style=flat-square)](https://github.com/xvirobotics/metabot)
+### 在飞书 / Telegram / 微信上用手机控制 Claude Code、Kimi Code 或 Codex CLI
 
-中文 | [English](README_EN.md) | [文档站](https://xvirobotics.com/metabot/zh/)
+*写代码 · 管 Agent · 自动化一切*
 
-> 在飞书中设定一个每天早上9点自动搜索 AI 新闻并保存到 MetaMemory 的定时任务 — Thinking → Running → Complete，全程流式展示。
+<p>
+  <a href="https://github.com/xvirobotics/metabot"><img src="https://img.shields.io/badge/GitHub-Repo-181717?style=for-the-badge&logo=github&logoColor=white" alt="GitHub"></a>
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="License"></a>
+</p>
 
-![MetaBot Demo](resources/metabot-demo.gif)
+<p>
+  <a href="https://github.com/anthropics/claude-code"><img src="https://img.shields.io/badge/Engine-Claude_Code-D97757?style=for-the-badge&logo=anthropic&logoColor=white" alt="Claude Code"></a>
+  <a href="https://platform.moonshot.ai"><img src="https://img.shields.io/badge/Engine-Kimi_Code-1A73E8?style=for-the-badge&logoColor=white" alt="Kimi Code"></a>
+  <a href="https://github.com/openai/codex"><img src="https://img.shields.io/badge/Engine-Codex_CLI-412991?style=for-the-badge&logo=openai&logoColor=white" alt="Codex CLI"></a>
+  <img src="https://img.shields.io/badge/Subscription-Native-22C55E?style=for-the-badge&logo=key&logoColor=white" alt="Native Subscription">
+  <img src="https://img.shields.io/badge/Node.js-20+-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node.js">
+</p>
+
+<p>
+  <a href="https://feishu.cn"><img src="https://img.shields.io/badge/飞书_/_Lark-00D6B9?style=for-the-badge&logo=lark&logoColor=white" alt="Feishu/Lark"></a>
+  <a href="https://telegram.org"><img src="https://img.shields.io/badge/Telegram-26A5E4?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram"></a>
+  <a href="https://ilinkai.weixin.qq.com"><img src="https://img.shields.io/badge/微信_ClawBot-07C160?style=for-the-badge&logo=wechat&logoColor=white" alt="WeChat"></a>
+  <img src="https://img.shields.io/badge/Web_UI-61DAFB?style=for-the-badge&logo=react&logoColor=white" alt="Web UI">
+</p>
+
+**中文** · [English](README_EN.md) · [📚 文档](docs/)
+
+</div>
+
+> 支持 **Claude Code**、**Kimi Code** 和 **Codex CLI** 三大引擎 — 订阅 / API Key 任你选，每个 Bot 可独立选引擎。
+
+<div align="center">
+<table>
+<tr>
+  <td width="25%"><img src="resources/demo-1.png" alt="召唤 Agent Team" /></td>
+  <td width="25%"><img src="resources/demo-2.png" alt="下达任务" /></td>
+  <td width="25%"><img src="resources/demo-3.png" alt="Agent 之间持续工作" /></td>
+  <td width="25%"><img src="resources/demo-4.png" alt="PR 已合并" /></td>
+</tr>
+</table>
+<sub>飞书移动端 · 召唤团队 · 下达任务 · 实时跟进 · PR 合并</sub>
+</div>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xvirobotics/metabot/main/install.sh | bash
+git clone https://github.com/xvirobotics/metabot.git ~/metabot
+cd ~/metabot && bash install.sh
 ```
 
-安装器引导一切：工作目录 → Claude 认证 → IM 平台 → PM2 自动启动。**5 分钟上手。**
+安装器引导一切：工作目录 → **引擎选择（Claude / Kimi / Codex）** → 订阅登录 → IM 平台 → PM2 自动启动。**5 分钟上手。**
+
+> 自定义安装目录（默认 `~/metabot`）：把 `~/metabot` 换成你想要的路径即可，或 `METABOT_HOME=/opt/metabot bash install.sh`。Windows: `.\install.ps1 -Dir C:\opt\metabot`。
+>
+> 也可以一行直装：`curl -fsSL https://raw.githubusercontent.com/xvirobotics/metabot/main/install.sh | bash`。
+
+---
+
+## 🔑 自托管 & 鉴权（个人版）
+
+MetaBot 开箱即是**可自托管的个人版**：本地跑、单 token 鉴权、**不依赖任何 SSO / 企业登录**。
+
+- **本地优先**：`metabot-core` 默认只监听 `http://localhost:9200`，首次启动自动生成本地 API token（写入 `~/.metabot-core/token`）。CLI 与 Web 控制台都用它鉴权。数据默认落在 `~/.metabot-core/`。
+- **无需 SSO**：不需要 OAuth / OIDC / 企业 VPN。要多人或公网访问时，自行在前面挂一个反向代理（可选 oauth2-proxy）即可，应用层不强制。
+- **分发端点默认上锁**：`/cli/*`、`/install/*` 安装分发端点默认需要 token；确认你的构建不含密钥后，可设 `METABOT_PUBLIC_DISTRIBUTION=1` 放开匿名下载。
+
+---
+
+## 三引擎：Claude Code ✕ Kimi Code ✕ Codex CLI 并列一等支持
+
+MetaBot 不是只绑定一家 — 三大顶级 AI 编码 Agent 都内置原生支持，**你的订阅直接用**。
+
+| | **Claude Code**（Anthropic） | **Kimi Code**（Moonshot） | **Codex CLI**（OpenAI） |
+|---|---|---|---|
+| **订阅直连** | ✅ `claude login` OAuth | ✅ `kimi login` | ✅ `codex login`，走 ChatGPT 订阅 |
+| **API Key 兜底** | ✅ `ANTHROPIC_API_KEY` / 第三方 Anthropic 兼容端 | ✅ Moonshot API Key | ✅ `OPENAI_API_KEY` / Codex profile |
+| **上下文窗口** | 200k（Opus/Sonnet 可选 1M） | 256k（kimi-for-coding） | 400k（gpt-5.x-codex） |
+| **工具能力** | Read/Write/Edit/Bash/Glob/Grep/WebSearch/MCP | 同上（Kimi CLI 原生 + `.claude/skills/` 自动发现） | Codex CLI 原生工具链 + `.codex/skills/` 自动发现 |
+| **自主运行模式** | `bypassPermissions` | `yoloMode`（等价） | 默认 `--sandbox danger-full-access`，避免无 user namespace 环境下的 `bwrap` 失败 |
+| **子 Agent** | `.claude/agents/*.md` 自动加载 | 仅内置 `default` / `okabe` | 暂不支持项目子 Agent；把角色/路由写进 `AGENTS.md` |
+| **工作区说明** | `CLAUDE.md` | `AGENTS.md`（安装器自动建软链） | `AGENTS.md`（Codex 官方约定） |
+
+**配置只需一行** — 每个 Bot 独立选引擎：
+```json
+{ "name": "bulma", "engine": "kimi",   "kimi": { "thinking": true } }
+{ "name": "goku",  "engine": "claude" }
+{ "name": "vegeta", "engine": "codex", "codex": { "model": "gpt-5.4-codex" } }
+```
+
+Codex 支持通过本机 `codex exec --json` CLI 接入，并使用 `codex exec resume` 续接聊天会话。启动 MetaBot 前，请先执行 `codex login` 或配置好 Codex API key/profile。MetaBot 会把飞书侧的 `/<skill-name> ...` 调用统一转成 Codex 的 `$<skill-name> ...` 显式技能调用（例如安装了 `/metaschedule` 后，Codex 会收到 `$metaschedule ...`）。
+
+### Codex 迁移：复用 `.claude` 配置
+
+Claude/Kimi 和 Codex 的发现路径不同。MetaBot 安装、更新和 Skill Hub 安装时会自动镜像内置 skills：
+
+| 内容 | Claude / Kimi | Codex |
+|------|---------------|-------|
+| 工作区说明 | `CLAUDE.md` | `AGENTS.md` |
+| Skills | `.claude/skills/<name>/SKILL.md` | `.codex/skills/<name>/SKILL.md` |
+| 子 Agent | `.claude/agents/*.md` | 不自动加载；迁移为 `AGENTS.md` 里的角色/路由说明 |
+
+已有项目可以直接让 Codex 帮你迁移：
+
+```text
+/model codex
+请根据当前项目的 .claude 配置，为 Codex 创建对应的 .codex/skills 和 AGENTS.md：
+- 把 .claude/skills/* 镜像到 .codex/skills/*
+- 根据 CLAUDE.md 生成或更新 AGENTS.md
+- 如果存在 .claude/agents/*.md，把这些 subagent 的角色、路由表和工作流整合进 AGENTS.md
+```
+
+如果你的宿主机禁用了 unprivileged user namespace，Codex CLI 的 `workspace-write` sandbox 可能在命令执行前报 `bwrap: No permissions to create a new namespace`。MetaBot 的 Codex 默认改用 `danger-full-access` 避开这个问题；需要更强隔离时可以通过 `CODEX_SANDBOX` 或 `codex.sandbox` 显式覆盖。
+
+前端 Bot 用 Claude、后端 Bot 用 Kimi？完全可以。Agent 总线让它们互相委派任务，对面跑什么引擎对调用方透明。
 
 ---
 
 ## 你能用它做什么
 
-- **手机写代码** — 地铁上用飞书给 Claude Code 发消息，它帮你改 bug、提 PR、跑测试
-- **多 Agent 协作** — 前端 Bot、后端 Bot、运维 Bot，各自独立工作空间，通过 Agent 总线互相委派任务
+- **手机写代码** — 地铁上用飞书给 Claude Code / Kimi Code / Codex CLI 发消息，它帮你改 bug、提 PR、跑测试
+- **多 Agent 协作** — 前端 Bot、后端 Bot、运维 Bot，各自独立工作空间（甚至独立引擎），通过 Agent 总线互相委派任务
 - **知识自生长** — Agent 把学到的东西存入 MetaMemory，组织每天都在变聪明，无需重新训练
 - **自动化流水线** — "每天早上9点搜 AI 新闻，总结 Top 5，存档" — 一句话搞定
 - **语音助手（Jarvis 模式）** — AirPods 说 "Hey Siri, Jarvis"，免手免屏语音控制任意 Agent
@@ -31,14 +127,16 @@ curl -fsSL https://raw.githubusercontent.com/xvirobotics/metabot/main/install.sh
 
 ## 为什么选 MetaBot
 
-| | MetaBot | 直接用 Claude Code | Dify / Coze |
+| | MetaBot | 直接用 Claude / Kimi / Codex CLI | Dify / Coze |
 |---|---|---|---|
 | **手机控制** | 飞书/TG/微信随时随地 | 只能在终端 | 有，但不能跑代码 |
-| **代码能力** | 完整 Claude Code（Read/Write/Edit/Bash/MCP） | 完整 | 无，只能调 API |
+| **引擎选择** | Claude ✕ Kimi ✕ Codex 三引擎 | 各自单一 | 无，只能调 API |
+| **订阅直连** | 三家原生订阅都直接用 | 一次只能登一个 | 不支持订阅 |
+| **代码能力** | 完整 Agent SDK（Read/Write/Edit/Bash/MCP） | 完整 | 无 |
 | **多 Agent** | Agent 总线 + 任务委派 + 运行时创建 | 单会话 | 有，但封闭生态 |
 | **共享记忆** | MetaMemory 全文搜索 + 自动同步飞书知识库 | 无 | 无 |
-| **定时任务** | Cron 调度，跨重启持久化 | 无 | 有 |
-| **自主运行** | bypassPermissions，全自动 | 需要人工确认 | 受限于 workflow |
+| **定时任务** | CC 原生 `CronCreate` / `/loop` 即开即用，可选 `/metaschedule` 跨重启持久化 | 仅原生 `CronCreate` / `/loop` | 有 |
+| **自主运行** | bypassPermissions / yoloMode，全自动 | 需要人工确认 | 受限于 workflow |
 | **开源** | MIT，完全可控 | CLI 开源 | 闭源 SaaS |
 
 ## 工作原理
@@ -46,13 +144,39 @@ curl -fsSL https://raw.githubusercontent.com/xvirobotics/metabot/main/install.sh
 ![MetaBot 架构图](resources/metabot.png)
 
 ```
-飞书/TG/微信 → IM Bridge → Claude Code Agent SDK → 流式卡片更新
+飞书/TG/微信 → IM Bridge → Engine Router ──┬─→ Claude Code Agent SDK
+                                            ├─→ Kimi Agent SDK（@moonshot-ai/kimi-agent-sdk）
+                                            └─→ Codex CLI（codex exec --json 子进程）
                               ↕
                     MetaMemory（共享知识库）
-                    MetaSkill（Agent 工厂）
-                    定时调度器（Cron 任务）
-                    Agent 总线（跨 Bot 通信）
+                    定时调度（CC 原生 CronCreate / /loop；可选 /metaschedule 持久化）
+                    Agent 总线（跨 Bot 通信，引擎无关）
+                    Agent 工厂（可选 /metaskill，按需安装）
 ```
+
+引擎层已抽象 —— Kimi 事件流和 Codex JSONL 都被翻译成 Claude 形状的 `SDKMessage`，流式卡片、工具调用追踪、MetaMemory/调度/Agent 总线在三种引擎下表现一致。
+
+## 仓库布局（Monorepo）
+
+MetaBot 从 2026-05-19 起把 `metabot-core` 合并进同一个 monorepo（npm workspaces）。Bridge 运行时仍在仓库根目录，吸收进来的中心服务侧在 `packages/` 下面：
+
+```
+metabot/                       # 仓库根 —— bridge 运行时（bot 主机用 PM2 跑）
+├── src/                       # bridge 引擎、流处理、Feishu/Telegram/微信桥接
+├── bin/                       # CLI（metabot 单一入口 / doubao-tts）
+├── web/                       # bridge 自带的浏览器 SPA
+├── packages/                  # 吸收进来的 metabot-core
+│   ├── server/                # 中心 HTTP 后端（ECS 部署单元）
+│   ├── cli/                   # `metabot <子命令>` 功能 CLI 实现
+│   ├── web-ui/                # 中心 SPA（Vite，编译后由 server/static/ 提供）
+│   ├── cli-core/              # CLI/客户端共享底层
+│   ├── metamemory/            # /api/memory 的瘦客户端
+│   ├── skill-hub/             # /api/skills 的瘦客户端
+│   └── skills/                # 默认 skill bundle 源（metabot SKILL.md）
+└── docs/                      # 全量文档
+```
+
+两半之间**只通过 HTTP `/api/*` 通信**，不允许跨包 import（由 ESLint `no-restricted-imports` + `packages/server/package.json` exports 锁双重护栏）。Bridge 主机的 `install.sh` 只安装 bridge 自己 + CLI/CLI-Core 所需依赖，**不会**拉中心服务专属的 fastify / react / vite / 服务端 better-sqlite3。中心 server 部署仍走 `cd packages/server && bash deploy/install.sh`（脚本内部用 `$PKG_DIR`，不受路径迁移影响）。
 
 ## 多端接入
 
@@ -68,7 +192,7 @@ MetaBot 支持 4 种方式与你的 Agent 团队交互：
 |------|------|------|
 | **受监督** | IM Bridge | 实时流式卡片展示每一步工具调用。人类看到 Agent 做的一切 |
 | **自我进化** | MetaMemory | 共享知识库。Agent 写入学到的东西，其他 Agent 检索引用 |
-| **Agent 组织** | MetaSkill + 调度器 + Agent 总线 | 一个命令生成完整 Agent 团队。Agent 互相委派任务、创建新 Agent |
+| **Agent 组织** | Agent 总线 + CC 原生调度（可选 MetaSkill / MetaSchedule） | Agent 互相委派任务、按需创建新 Agent；用 CC 内置 `CronCreate` / `/loop` 即可定时；要跨重启可装可选 `/metaschedule` |
 
 ## Web UI
 
@@ -87,21 +211,24 @@ MetaBot 支持 4 种方式与你的 Agent 团队交互：
 
 **技术栈**：React 19 + Vite + Zustand + react-markdown
 
-> 语音功能需要 HTTPS。推荐用 Caddy 反向代理，自动管理证书。详见 [Web UI 文档](https://xvirobotics.com/metabot/zh/features/web-ui/)。
+> 语音功能需要 HTTPS。推荐用 Caddy 反向代理，自动管理证书。详见 [Web UI 文档](docs/features/web-ui.zh.md)。
 
 ## 核心能力
 
 | 组件 | 一句话说明 |
 |------|-----------|
-| **Claude Code 内核** | 每个 Bot 都是完整的 Claude Code — Read/Write/Edit/Bash/Glob/Grep/WebSearch/MCP，`bypassPermissions` 全自动 |
-| **MetaSkill** | Agent 工厂。`/metaskill` 一键生成 `.claude/` Agent 团队（orchestrator + 专家 + reviewer） |
-| **MetaMemory** | 内嵌 SQLite 知识库，全文搜索，Web UI，变更自动同步到飞书知识库 |
+| **三引擎内核** | 每个 Bot 独立选 Claude Code / Kimi Code / Codex CLI — 完整工具链（Read/Write/Edit/Bash/Glob/Grep/WebSearch/MCP），自主模式运行 |
+| **常驻会话与目标循环** | 每个会话一个常驻 Claude 进程 — `/goal` 让 Agent 在多轮之间持续自驱直到目标达成；团队成员和后台任务跨轮存活 |
+| **Agent 团队（运行时）** | 主导 Agent 并行派遣专家队友，互相路由任务、汇总结果 —— 全部在一个飞书会话中完成 |
+| **CC 原生调度** | 直接用 Claude Code 内置的 `CronCreate` / `/loop` —— 即开即用，会话内最简单 |
+| **MetaMemory** | 由 metabot-core 服务（本地自托管，默认 `http://localhost:9200`）提供的共享知识库，全文搜索；MetaBot 通过 `/api/memory/*` 读写，并可同步到飞书知识库 |
 | **IM Bridge** | 飞书、Telegram、微信（含手机端）对话任意 Agent，流式卡片 + 工具调用追踪 |
-| **Agent 总线** | Agent 通过 `mb talk` 互相对话，运行时创建/删除 Bot |
-| **定时调度器** | Cron 周期任务 + 一次性延迟任务，跨重启持久化，忙时自动重试 |
+| **Agent 总线** | Agent 通过 `metabot talk` 互相对话，运行时创建/删除 Bot |
+| **MetaSchedule（可选）** | 跨重启的服务端定时调度器，Cron + 一次性延迟，HTTP API + `metabot schedule` CLI。默认不装，按需 `cp src/skills/metaschedule/SKILL.md` 启用 |
+| **MetaSkill（可选）** | Agent 工厂。`/metaskill` 一键生成可迁移的 Agent 团队。默认不装，按需 `cp src/skills/metaskill/` 启用 |
 | **飞书 Lark CLI** | 200+ 命令覆盖文档、消息、日历、任务等 11 大业务域，19 个 AI Agent Skills |
-| **Skill Hub** | 跨实例技能共享注册中心。`mb skills` 发布、发现、安装技能，FTS5 全文搜索 |
-| **Peers 联邦** | 跨实例 Bot 发现和任务路由，`mb talk alice/backend-bot` 自动路由 |
+| **Skill Hub** | 中心化技能共享注册中心。`metabot skills` 发布、发现、安装技能，FTS5 全文搜索（由 metabot-core 提供）|
+| **Peers 联邦** | 跨实例 Bot 发现和任务路由，`metabot talk alice/backend-bot` 自动路由 |
 | **语音助手** | Jarvis 模式 — AirPods 说 "Hey Siri, Jarvis" 语音控制 Agent |
 
 ## 快速开始
@@ -111,23 +238,15 @@ MetaBot 支持 4 种方式与你的 Agent 团队交互：
 1. 找 [@BotFather](https://t.me/BotFather) → `/newbot` → 复制 token
 2. 写入 `bots.json` → 完成（长轮询，无需 Webhook）
 
-### 微信
+### 微信（灰测中）
 
-1. 在 `bots.json` 中配置 `wechatBots`（见上方多 Bot 配置）
-2. 启动 MetaBot，控制台输出微信扫码链接，点击链接或扫描二维码，用手机微信授权
-3. 详见 [微信接入指南（手动模式）](https://xvirobotics.com/metabot/zh/features/wechat/)
+1. iPhone 微信 8.0.70+ → 设置 → 插件 → 开启 **ClawBot**
+2. 运行 `install.sh`，选 `3) WeChat ClawBot` — 扫码绑定
+3. 详见 [微信接入指南](docs/features/wechat.zh.md)
 
 ### 飞书
 
-**方式一：快速创建（推荐）**
-
-1. 运行 `npx -y @larksuite/openclaw-lark install`，按提示选择「新建机器人」，用手机飞书扫码授权
-2. 登录 [open.feishu.cn](https://open.feishu.cn/) → 在应用列表中找到刚创建的应用 → 复制 **App ID** 和 **App Secret**
-3. 写入 `bots.json`（见下方多 Bot 配置）
-
-**方式二：手动创建**
-
-1. 登录 [open.feishu.cn](https://open.feishu.cn/) → 创建应用 → 添加「机器人」能力
+1. [open.feishu.cn](https://open.feishu.cn/) 创建应用 → 添加「机器人」能力
 2. 开通权限：`im:message`、`im:message:readonly`、`im:resource`、`im:chat:readonly`
 3. 先启动 MetaBot，再开启「长连接」+ `im.message.receive_v1` 事件
 4. 发布应用
@@ -135,47 +254,6 @@ MetaBot 支持 4 种方式与你的 Agent 团队交互：
 > 不需要公网 IP。飞书用 WebSocket，Telegram 和微信用长轮询。
 
 **Web UI**：启动 MetaBot 后访问 `http://localhost:9100/web/`，输入 API_SECRET 即可使用。
-
-## 多 Bot 配置
-
-MetaBot 支持在单个进程中运行多个 Bot，每个 Bot 有独立的工作目录和对话历史。通过 `bots.json` 配置：
-
-```json
-{
-  "feishuBots": [
-    {
-      "name": "ClaudeBot",
-      "feishuAppId": "cli_xxx",
-      "feishuAppSecret": "...",
-      "defaultWorkingDirectory": "D:\\workspace"
-    },
-    {
-      "name": "日常Bot",
-      "feishuAppId": "cli_yyy",
-      "feishuAppSecret": "...",
-      "defaultWorkingDirectory": "C:\\Users\\你的用户名"
-    }
-  ],
-  "wechatBots": [
-    {
-      "name": "wechat-assistant",
-      "defaultWorkingDirectory": "C:\\Users\\你的用户名"
-    }
-  ]
-}
-```
-
-**多 Bot 场景示例**：
-
-| 场景 | Bot 名称 | 工作目录 |
-|------|----------|----------|
-| 开发助手 | `ClaudeBot` | `D:\workspace` — 代码项目 |
-| 个人助手 | `日常Bot` | `C:\Users\你的用户名` — 文档、日常 |
-| 微信 Bot | `wechat-assistant` | `C:\Users\你的用户名` — 微信 |
-
-微信接入：启动 MetaBot 后，控制台会输出微信扫码链接（如 `https://liteapp.weixin.qq.com/q/...?qrcode=...`），点击链接或扫描二维码，用手机微信授权。详见 [微信接入指南](https://xvirobotics.com/metabot/zh/features/wechat/)。
-
-会话隔离：每个 Bot 的每个聊天（chatId）有独立的 Claude 会话和工作目录，互不干扰。不同 Bot 之间通过 Agent 总线（`mb talk`）互相委派任务。
 
 ## 示例 Prompt
 
@@ -191,22 +269,45 @@ MetaBot 支持在单个进程中运行多个 Bot，每个 Bot 有独立的工作
 搜索一下 MetaMemory 里有没有关于 API 设计规范的文档。
 ```
 
-### MetaSkill — Agent 工厂
+### 定时任务（Claude Code 原生）
+
+直接用 CC 内置的 `CronCreate` 和 `/loop`，会话内即开即用：
 
 ```
-/metaskill 给这个 React Native 项目创建一个 agent 团队 ——
-我需要一个前端专家、一个后端 API 专家、一个 code reviewer。
-```
-
-### 定时任务
-
-```
-设一个每天早上9点的定时任务：搜索 Hacker News 和 TechCrunch 的 AI 新闻，
+设个每天早上9点的定时任务：搜索 Hacker News 和 TechCrunch 的 AI 新闻，
 总结 Top 5，保存到 MetaMemory。
 ```
 
 ```
-设一个每周一早上8点的任务：review 上周的 git commit，生成进度报告。
+/loop 每隔 5 分钟检查一下 PR #123 的 CI 状态，跑完为止
+```
+
+> 想跨重启活下来、其他 Bot 也能看到/取消？装可选的 `/metaschedule` skill
+> （`cp src/skills/metaschedule/SKILL.md ~/.claude/skills/metaschedule/`），
+> 就能用 `metabot schedule cron` / HTTP API 提交到 MetaBot 服务端调度器。
+
+### Agent 团队 — 运行时协作
+
+```
+你来当主导工程师。并行派出一个前端专家和一个后端专家：
+前端负责 React UI 改造，后端加上新的 /api/reports 接口，
+你负责 review 两边的 PR，全部通过后再合并。
+```
+
+### 目标循环
+
+```
+/goal PR #123 的 CI 全绿、部署成功。
+每 10 分钟检查一次，搞定后告诉我。
+```
+
+### MetaSkill — Agent 工厂（可选）
+
+`/metaskill` 默认不装。先启用：`cp -r src/skills/metaskill ~/.claude/skills/`，然后：
+
+```
+/metaskill 给这个 React Native 项目创建一个 agent 团队 ——
+我需要一个前端专家、一个后端 API 专家、一个 code reviewer。
 ```
 
 ### Agent-to-Agent 协作
@@ -228,7 +329,8 @@ MetaBot 支持在单个进程中运行多个 Bot，每个 Bot 有独立的工作
 ```
 
 ```
-/metaskill 创建一个 "daily-ops" agent，每天早上8点自动运行：
+（先 cp src/skills/metaskill 到 ~/.claude/skills/ 以启用 /metaskill）
+/metaskill 创建一个 "daily-ops" agent，让它每天早上8点跑：
 检查服务健康状态、review 昨晚的错误日志、发一份运维摘要。
 ```
 
@@ -264,9 +366,23 @@ MetaBot 支持在单个进程中运行多个 Bot，每个 Bot 有独立的工作
 
 ## 配置
 
-**单 Bot 模式**：直接配置 `.env` 中的 `FEISHU_APP_ID` / `FEISHU_APP_SECRET`（默认）。
+**`bots.json`** — 定义你的 Bot：
 
-**多 Bot 模式**：设置 `BOTS_CONFIG=./bots.json` 以在单进程中运行多个 Bot，每个 Bot 独立认证和工作目录。会话完全隔离。详见上方「多 Bot 配置」章节。
+```json
+{
+  "feishuBots": [{
+    "name": "metabot",
+    "feishuAppId": "cli_xxx",
+    "feishuAppSecret": "...",
+    "defaultWorkingDirectory": "/home/user/project"
+  }],
+  "telegramBots": [{
+    "name": "tg-bot",
+    "telegramBotToken": "123456:ABC...",
+    "defaultWorkingDirectory": "/home/user/project"
+  }]
+}
+```
 
 <details>
 <summary><strong>所有 Bot 配置字段</strong></summary>
@@ -276,10 +392,13 @@ MetaBot 支持在单个进程中运行多个 Bot，每个 Bot 有独立的工作
 | `name` | 是 | — | Bot 标识名 |
 | `defaultWorkingDirectory` | 是 | — | Claude 的工作目录 |
 | `feishuAppId` / `feishuAppSecret` | 飞书 | — | 飞书应用凭证 |
+| `telegramBotToken` | Telegram | — | Telegram Bot Token |
 | `wechatBotToken` | 微信(可选) | — | 预认证 iLink token（不填则 QR 登录） |
 | `maxTurns` / `maxBudgetUsd` | 否 | 不限 | 执行限制 |
 | `model` | 否 | SDK 默认 | Claude 模型 |
 | `apiKey` | 否 | — | Anthropic API Key（不设则从 `~/.claude/.credentials.json` 动态读取，兼容 cc-switch） |
+| `visible` | 否 | `true` | Bot 是否对其他 bot / Agent Bus 可见，可被 `metabot talk` 触达。每次 bridge bulk-register 都按 bots.json 回写（不 sticky）|
+| `memoryPublic` | 否 | `true` | `metabot memory create/mkdir` 不带 `--path` 时的默认落点：`true` = `/shared/<bot>`（其他人可读），`false` = `/users/<bot>`（私有）。显式传 `--path` 永远以传入为准。bots.json 不写则保留 `metabot memory visibility` CLI 上次设置（sticky）|
 
 </details>
 
@@ -290,17 +409,14 @@ MetaBot 支持在单个进程中运行多个 Bot，每个 Bot 有独立的工作
 |------|------|------|
 | `API_PORT` | 9100 | HTTP API 端口 |
 | `API_SECRET` | — | Bearer 认证（同时保护 API 和 Web UI） |
-| `MEMORY_ENABLED` | true | 启用 MetaMemory |
-| `MEMORY_PORT` | 8100 | MetaMemory 端口 |
-| `MEMORY_ADMIN_TOKEN` | — | 管理员 Token（完整访问） |
-| `MEMORY_TOKEN` | — | 读者 Token（仅共享文件夹） |
+| `METABOT_CORE_URL` | `http://localhost:9200` | metabot-core 服务地址（MetaMemory + Skill Hub + Agents + T5T），本地自托管或填你自己的远程地址 |
+| `METABOT_CORE_TOKEN` | 读 `~/.metabot-core/token` | metabot-core Bearer Token（在 `<METABOT_CORE_URL>/cli` 自助生成） |
 | `WIKI_SYNC_ENABLED` | true | 启用 MetaMemory→飞书知识库同步 |
 | `WIKI_SPACE_NAME` | MetaMemory | 飞书知识库空间名称 |
-| `WIKI_AUTO_SYNC` | true | MetaMemory 变更时自动同步 |
+| `WIKI_SYNC_STATE_DIR` | `./data` | Wiki 同步映射 SQLite 存放目录 |
 | `VOLCENGINE_TTS_APPID` | — | 豆包语音（TTS + STT） |
 | `VOLCENGINE_TTS_ACCESS_KEY` | — | 豆包语音密钥 |
 | `METABOT_URL` | `http://localhost:9100` | MetaBot API 地址 |
-| `META_MEMORY_URL` | `http://localhost:8100` | MetaMemory 服务地址 |
 | `METABOT_PEERS` | — | Peer MetaBot 地址（逗号分隔） |
 | `LOG_LEVEL` | info | 日志级别 |
 
@@ -337,8 +453,8 @@ MetaBot 以 `bypassPermissions` 模式运行 Claude Code — 无交互式确认�
 - Claude 对工作目录有完整读写执行权限
 - 通过飞书/Telegram/微信平台设置控制访问
 - 用 `maxBudgetUsd` 限制单次花费
-- `API_SECRET` 保护 API 服务器和 MetaMemory
-- MetaMemory 支持文件夹级 ACL（Admin/Reader 双角色）
+- `API_SECRET` 保护 API 服务器
+- MetaMemory 由中心 metabot-core 服务托管，认证与 ACL 在中心侧统一管理
 
 </details>
 
@@ -349,23 +465,24 @@ MetaBot 以 `bypassPermissions` 模式运行 Claude Code — 无交互式确认�
 | `/reset` | 清除会话 |
 | `/stop` | 中止当前任务 |
 | `/status` | 查看会话状态（含当前模型） |
+| `/goal <条件>` | 设置目标，Agent 跨多轮持续推进直到达成。`/goal clear` 停止 |
 | `/model` | 查看当前模型；`/model list` 查看可用模型；`/model <name>` 切换；`/model reset` 恢复默认 |
-| `/sessions` | 列出最近会话 |
-| `/switch [N]` | 切换到指定会话（无参数时进入选择模式） |
 | `/memory list` | 浏览知识库目录 |
 | `/memory search 关键词` | 搜索知识库 |
 | `/sync` | 同步 MetaMemory 到飞书知识库 |
-| `/metaskill ...` | 生成 Agent 团队、Agent 或 Skill |
+| `/metaskill ...` | 生成 Agent 团队、Agent 或 Skill（可选 skill，默认不装） |
 | `/help` | 帮助 |
 
-> **模型切换**：每个会话可独立设置模型。在模型名后加 `[1m]` 可启用 1M 上下文窗口（仅 Opus 4.7/4.6、Sonnet 4.6 支持），例如 `/model claude-opus-4-7[1m]`。OAuth/Pro-Max 登录用户 SDK 会丢弃 beta flag，`[1m]` 后缀是唯一可靠的 1M 开启方式。
+> **模型切换**：每个会话可独立设置模型，默认 `claude-fable-5`。Fable 5 使用 Claude Code 原生 1M 上下文、128k max output 和 adaptive thinking；Opus/Sonnet 仍默认保持 200k 上下文，可在模型名后加 `[1m]` 启用 1M，例如 `/model claude-opus-4-8[1m]`。
+> **Codex Skill 调用**：飞书里发的 `/<skill> ...` 在 Codex 会话下会被 MetaBot 自动改写成 `$<skill> ...`，例如 `$metaschedule ...`。
 
 <details>
 <summary><strong>API 参考</strong></summary>
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `GET` | `/api/health` | 健康检查 |
+| `GET` | `/api/health` | 健康检查（无需认证）— 仅返回 `{ status, uptime }` |
+| `GET` | `/api/status` | 详细状态：Bot 数、peer、定时任务（需认证） |
 | `GET` | `/api/bots` | 列出 Bot（本地 + Peer） |
 | `POST` | `/api/bots` | 运行时创建 Bot |
 | `DELETE` | `/api/bots/:name` | 删除 Bot |
@@ -391,42 +508,47 @@ MetaBot 以 `bypassPermissions` 模式运行 Claude Code — 无交互式确认�
 <details>
 <summary><strong>CLI 工具</strong></summary>
 
-安装器将 `metabot`、`mm`、`mb` 放到 `~/.local/bin/`，安装后立即可用。
+安装器将 `metabot` 放到 `~/.local/bin/`，安装后立即可用。`metabot` 是**唯一的 CLI 入口**，三类命令：(1) bridge 进程控制（`update` / `start` / `stop` / `restart` / `logs` / `status`）；(2) bridge 守护进程 API（`bots` / `talk` / `schedule` / `peers` / `stats` / `voice` / `health`，curl 本地 `localhost:9100`）；(3) 其余（`t5t` / `agents` / `memory` / `skills`）转发给本仓库 monorepo 内 `packages/cli/bin/metabot` 提供的 metabot-core 功能 CLI。旧的 `mb`/`mm`/`mh` CLI 与 `metamemory`/`skill-hub` skill bundle 已下线（安装/更新时会自动清掉 `~/.local/bin/` 里的残留）。
 
 ```bash
-# MetaBot 管理
-metabot update                      # 拉取最新代码，重新构建，重启
+# 1. MetaBot 进程管理（bin/metabot 直接处理）
+metabot update                      # 拉取最新代码，重新构建，更新 skills，重启
 metabot start / stop / restart      # PM2 管理
 metabot logs                        # 查看实时日志
+metabot status                      # PM2 进程状态
 
-# MetaMemory
-mm search "部署指南"                 # 全文搜索
-mm list                             # 列出文档
-mm folders                          # 文件夹树
+# 2. bridge 守护进程 API（curl 本地 localhost:9100）
+metabot bots                        # 列出所有 Bot
+metabot talk <bot> <chatId> <prompt> # 与 Bot 对话
+metabot stats                       # 费用和使用统计
+metabot voice tts "你好世界" --play  # 文字转语音
 
-# Agent 总线
-mb bots                             # 列出所有 Bot
-mb talk <bot> <chatId> <prompt>     # 与 Bot 对话
-mb schedule list                    # 列出定时任务
-mb schedule cron <bot> <chatId> '<cron>' <prompt>  # 创建周期性任务
-mb stats                            # 费用和使用统计
+# 3. 功能子命令（转发给 metabot-core 功能 CLI）
+metabot t5t board                   # 团队日报看板
+metabot agents list                 # 对端 Bot 通讯录
+metabot memory search "部署指南"     # 共享记忆全文搜索
+metabot memory visibility           # 查看当前 bot 默认写 public 还是 private
+metabot memory visibility private   # 切到 private（默认写 /users/<bot>，仅自己可读）
+metabot skills list                 # 技能仓库（中心 Skill Hub）
+# 覆盖 metabot-core CLI 路径：export METABOT_CORE_CLI=/path/to/packages/cli/bin/metabot
+
+# 定时任务 — 推荐 CC 原生：直接在 Claude Code 里用 CronCreate / /loop。
+# 跨重启的服务端调度（metabot schedule list / cron / cancel / pause / resume）
+# 由可选 /metaschedule skill 提供，按需安装：
+#   cp src/skills/metaschedule/SKILL.md ~/.claude/skills/metaschedule/
 
 # 飞书 Lark CLI（飞书 Bot 专属）
 lark-cli docs +fetch --doc <飞书链接>
 lark-cli im +messages-send --chat-id oc_xxx --text "Hi"
 lark-cli calendar +agenda --as user
 
-# Skill Hub
-mb skills                             # 列出所有技能
-mb skills search <关键词>              # 搜索技能
-mb skills publish <bot> <skill>       # 发布 Bot 的技能
-mb skills install <skill> <bot>       # 安装技能到 Bot
-
 # 文字转语音
-mb voice "你好世界" --play
+metabot voice tts "你好世界" --play
 ```
 
-CLI 支持连接远程 MetaBot/MetaMemory 服务器，在 `~/.metabot/.env` 配置 `METABOT_URL` 和 `META_MEMORY_URL` 即可。
+`metabot update` 会自动更新已安装的 `lark-cli` 和飞书/Lark skills，并同步到 bot 工作目录；新机器首次安装时仍由安装器引导是否启用飞书 skills。
+
+CLI 支持连接远程 MetaBot 服务器，在 `~/.metabot/.env` 配置 `METABOT_URL` 即可；MetaMemory / Skill Hub / Agents / T5T 由 metabot-core 统一提供，配置 `METABOT_CORE_URL` + `METABOT_CORE_TOKEN`，在 `<METABOT_CORE_URL>/cli` 自助获取 Token。
 
 </details>
 
@@ -445,93 +567,25 @@ npm run dev
 
 </details>
 
-## Windows 后台服务（NSSM）
-
-在 Windows 上推荐用 [NSSM](https://nssm.cc/) 将 MetaBot 注册为后台服务，开机自启、进程崩溃自动重启。
-
-### 1. 下载 NSSM
-
-从 https://nssm.cc/download 下载最新版，解压后将 `win64/nssm.exe` 放到 PATH 中（如 `C:\Windows`），或记住完整路径。
-
-### 2. 安装服务
-
-**以管理员身份**打开 PowerShell 或命令提示符，执行：
-
-```powershell
-# 替换为你的实际路径
-$NODE = "C:\Program Files\nodejs\node.exe"
-$APP = "C:\Users\你的用户名\metabot\dist\index.js"
-$WORKDIR = "C:\Users\你的用户名\metabot"
-
-nssm install MetaBot $NODE $APP
-nssm set MetaBot AppDirectory $WORKDIR
-
-# 配置日志文件重定向
-New-Item -ItemType Directory -Force -Path "$WORKDIR\logs" | Out-Null
-nssm set MetaBot AppStdout "$WORKDIR\logs\metabot.log"
-nssm set MetaBot AppStderr "$WORKDIR\logs\metabot.log"
-
-nssm start MetaBot
-```
-
-### 3. 管理服务
-
-```powershell
-# 查看状态
-nssm status MetaBot
-
-# 查看/编辑日志（弹出配置窗口）
-nssm edit MetaBot
-
-# 停止服务
-nssm stop MetaBot
-
-# 重启服务
-nssm restart MetaBot
-
-# 删除服务
-nssm remove MetaBot
-```
-
-### 4. 验证
-
-```powershell
-# 检查端口是否在监听
-netstat -ano | findstr ":9100"
-
-# 检查服务状态
-nssm status MetaBot
-```
-
-访问 `http://localhost:9100/web/` 确认 Web UI 可用。
-
----
-
 ## 开发
 
 ```bash
 npm run dev          # 热重载开发服务器（tsx）
 npm test             # 运行测试（vitest）
 npm run lint         # ESLint 检查
-npm run build        # TypeScript 编译 + 构建 Web 前端
+npm run build        # TypeScript 编译
 ```
 
 ## Roadmap
 
-- [ ] Agent 异步双向通信协议
 - [ ] 插件市场（MCP Server 一键安装）
 - [ ] 更多 IM 平台（Slack、Discord、钉钉）
-- [ ] 多租户模式
 
 ## 关于
 
 MetaBot 由 [XVI Robotics](https://xvirobotics.com) 打造（人形机器人大脑公司）。我们在内部用 MetaBot 把公司打造成 **Agent Native 组织** —— 一个小团队的人类，监督自我进化的 AI Agent。
 
 我们开源它，因为我们相信这是未来公司的运行方式。
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=xvirobotics/metabot&type=Date)](https://star-history.com/#xvirobotics/metabot&Date)
 
 ## License
 

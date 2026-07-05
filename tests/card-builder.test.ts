@@ -1,28 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { buildCard, buildHelpCard, buildStatusCard, buildTextCard } from '../src/feishu/card-builder.js';
-import { optimizeMarkdownStyle, sanitizeTextForCard, findMarkdownTablesOutsideCodeBlocks } from '../src/feishu/markdown-style.js';
 import type { CardState } from '../src/types.js';
 
-// ---------------------------------------------------------------------------
-// buildCard — CardKit v2 structure
-// ---------------------------------------------------------------------------
-
 describe('buildCard', () => {
-  it('outputs CardKit v2 structure with schema and body.elements', () => {
-    const state: CardState = {
-      status: 'complete',
-      userPrompt: 'hello',
-      responseText: 'Done.',
-      toolCalls: [],
-    };
-    const json = JSON.parse(buildCard(state));
-    expect(json.schema).toBe('2.0');
-    expect(json.body).toBeDefined();
-    expect(json.body.elements).toBeInstanceOf(Array);
-    // v1 top-level `elements` should NOT exist
-    expect(json.elements).toBeUndefined();
-  });
-
   it('builds thinking card', () => {
     const state: CardState = {
       status: 'thinking',
@@ -33,10 +13,10 @@ describe('buildCard', () => {
     const json = JSON.parse(buildCard(state));
     expect(json.header.template).toBe('blue');
     expect(json.header.title.content).toContain('Thinking');
-    expect(json.body.elements.some((e: any) => e.tag === 'markdown' && e.content.includes('thinking'))).toBe(true);
+    expect(json.elements.some((e: any) => e.tag === 'markdown' && /thinking/i.test(e.content))).toBe(true);
   });
 
-  it('builds running card with tool calls', () => {
+  it('builds running card with a single-line tool indicator (no per-tool list)', () => {
     const state: CardState = {
       status: 'running',
       userPrompt: 'fix bug',
@@ -48,10 +28,33 @@ describe('buildCard', () => {
     };
     const json = JSON.parse(buildCard(state));
     expect(json.header.template).toBe('blue');
-    const md = json.body.elements.find((e: any) => e.tag === 'markdown' && e.content.includes('Read'));
+    // Should show one summary line referencing the latest (running) tool +
+    // the total tool count, NOT a per-tool list. The earlier completed tool
+    // ("Read") must NOT appear — only the current "Edit" plus the count.
+    const md = json.elements.find(
+      (e: any) => e.tag === 'markdown' && /\*\*Edit\*\* · 2 tools/.test(e.content),
+    );
     expect(md).toBeDefined();
-    expect(md.content).toContain('✅');
     expect(md.content).toContain('⏳');
+    expect(md.content).not.toContain('Read');
+    expect(md.content).not.toContain('✅');
+  });
+
+  it('omits the tool indicator entirely once the turn is complete', () => {
+    const state: CardState = {
+      status: 'complete',
+      userPrompt: 'fix bug',
+      responseText: 'Done.',
+      toolCalls: [
+        { name: 'Read', detail: '`src/index.ts`', status: 'done' },
+        { name: 'Edit', detail: '`src/index.ts`', status: 'done' },
+      ],
+    };
+    const json = JSON.parse(buildCard(state));
+    const toolEl = json.elements.find(
+      (e: any) => e.tag === 'markdown' && (e.content.includes('Read') || e.content.includes('Edit') || /\d+ tools?/.test(e.content)),
+    );
+    expect(toolEl).toBeUndefined();
   });
 
   it('builds complete card with stats', () => {
@@ -65,11 +68,36 @@ describe('buildCard', () => {
     };
     const json = JSON.parse(buildCard(state));
     expect(json.header.template).toBe('green');
-    const footer = json.body.elements.find(
-      (e: any) => e.tag === 'markdown' && e.text_size === 'notation_small_v2'
+    const note = json.elements.find((e: any) => e.tag === 'note');
+    expect(note).toBeDefined();
+    expect(note.elements[0].content).toContain('5.0s');
+  });
+
+  // Cards from flushSpontaneous (between-turn agent activity) are sent with
+  // the `agent_activity` status so users can see at a glance that the card
+  // isn't a normal user-turn reply. Blue header, distinct title — the body
+  // no longer carries the long italic "Agent activity between turns (…)"
+  // caption that v1 had.
+  it('builds an agent_activity card with a blue header and an "Agent activity" title', () => {
+    const state: CardState = {
+      status: 'agent_activity',
+      userPrompt: '(agent activity)',
+      responseText: 'Pushed commit abc1234.',
+      toolCalls: [],
+    };
+    const json = JSON.parse(buildCard(state));
+    expect(json.header.template).toBe('blue');
+    expect(json.header.title.content).toContain('Agent activity');
+    // The body must NOT include the legacy italic caption.
+    const captionEl = json.elements.find(
+      (e: any) => e.tag === 'markdown' && /Agent activity between turns/.test(e.content),
     );
-    expect(footer).toBeDefined();
-    expect(footer.content).toContain('5.0s');
+    expect(captionEl).toBeUndefined();
+    // The actual conclusion text must be present.
+    const bodyEl = json.elements.find(
+      (e: any) => e.tag === 'markdown' && e.content.includes('Pushed commit abc1234'),
+    );
+    expect(bodyEl).toBeDefined();
   });
 
   it('builds error card with error message', () => {
@@ -82,7 +110,7 @@ describe('buildCard', () => {
     };
     const json = JSON.parse(buildCard(state));
     expect(json.header.template).toBe('red');
-    const errEl = json.body.elements.find((e: any) => e.tag === 'markdown' && e.content.includes('Process crashed'));
+    const errEl = json.elements.find((e: any) => e.tag === 'markdown' && e.content.includes('Process crashed'));
     expect(errEl).toBeDefined();
   });
 
@@ -107,10 +135,22 @@ describe('buildCard', () => {
     };
     const json = JSON.parse(buildCard(state));
     expect(json.header.template).toBe('yellow');
-    const qEl = json.body.elements.find((e: any) => e.tag === 'markdown' && e.content.includes('Which env?'));
+    const qEl = json.elements.find((e: any) => e.tag === 'markdown' && e.content.includes('Which env?'));
     expect(qEl).toBeDefined();
     expect(qEl.content).toContain('Production');
     expect(qEl.content).toContain('Staging');
+    // update_multi stays true even though we don't ship action buttons —
+    // belt-and-braces in case Feishu ever decides to redeliver clicks.
+    expect(json.config.update_multi).toBe(true);
+    // Buttons were removed: v2 mobile silently drops `tag: action` blocks,
+    // and v1 buttons trigger code 200340 on click. Question cards default
+    // to typed answers — numbered options inline + a prompt to reply.
+    const actionEl = json.elements.find((e: any) => e.tag === 'action');
+    expect(actionEl).toBeUndefined();
+    const promptEl = json.elements.find(
+      (e: any) => e.tag === 'markdown' && typeof e.content === 'string' && e.content.includes('请回复数字'),
+    );
+    expect(promptEl).toBeDefined();
   });
 
   it('truncates long content', () => {
@@ -121,25 +161,118 @@ describe('buildCard', () => {
       toolCalls: [],
     };
     const json = JSON.parse(buildCard(state));
-    const md = json.body.elements.find((e: any) => e.tag === 'markdown' && e.content.includes('truncated'));
+    const md = json.elements.find((e: any) => e.tag === 'markdown' && e.content.includes('truncated'));
     expect(md).toBeDefined();
+  });
+
+  it('renders a background task section with status icon + last event', () => {
+    const state: CardState = {
+      status: 'running',
+      userPrompt: 'watch ci',
+      responseText: 'watching…',
+      toolCalls: [],
+      backgroundEvents: [
+        { taskId: 'bheol4172', description: 'Watching CI for PR #215', status: 'running', lastEvent: 'check (20) running' },
+        { taskId: 'bmkr16j6f', description: 'Watching deploy', status: 'completed', lastEvent: 'CI done: success' },
+      ],
+    };
+    const json = JSON.parse(buildCard(state));
+    const bg = json.elements.find((e: any) => e.tag === 'markdown' && /Background/.test(e.content));
+    expect(bg).toBeDefined();
+    expect(bg.content).toContain('⏳');
+    expect(bg.content).toContain('✅');
+    expect(bg.content).toContain('Watching CI for PR #215');
+    expect(bg.content).toContain('check (20) running');
+    expect(bg.content).toContain('CI done: success');
+    expect(bg.content).toContain('bheol4'); // short task id
+  });
+
+  it('omits background section when no events', () => {
+    const state: CardState = {
+      status: 'running',
+      userPrompt: 'x',
+      responseText: 'y',
+      toolCalls: [],
+    };
+    const json = JSON.parse(buildCard(state));
+    const bg = json.elements.find((e: any) => e.tag === 'markdown' && /Background/.test(e.content));
+    expect(bg).toBeUndefined();
+  });
+
+  // Regression — keep parity with card-builder-v2: both builders must render
+  // these or /goal and Agent Teams become invisible to users.
+  it('renders 🎯 Goal badge when goalCondition is set (regression)', () => {
+    const state: CardState = {
+      status:        'running',
+      userPrompt:    't',
+      responseText:  '',
+      toolCalls:     [],
+      goalCondition: 'Ship the PR by Friday',
+    };
+    const json = JSON.parse(buildCard(state));
+    const goal = json.elements.find(
+      (e: any) => e.tag === 'markdown' && typeof e.content === 'string' && e.content.includes('🎯'),
+    );
+    expect(goal).toBeDefined();
+    expect(goal.content).toContain('Ship the PR by Friday');
+  });
+
+  it('renders 🧑‍🤝‍🧑 Team panel when teamState has members or tasks (regression)', () => {
+    const state: CardState = {
+      status:       'running',
+      userPrompt:   't',
+      responseText: '',
+      toolCalls:    [],
+      teamState: {
+        name:      'feishu-ux-review',
+        teammates: [{ name: 'ux-researcher', status: 'working', lastSubject: 'audit' }],
+        tasks:     [{ taskId: 't1', subject: 'UX audit', status: 'in_progress', teammate: 'ux-researcher' }],
+      },
+    };
+    const json = JSON.parse(buildCard(state));
+    const team = json.elements.find(
+      (e: any) => e.tag === 'markdown' && typeof e.content === 'string' && /Teammates/.test(e.content),
+    );
+    expect(team).toBeDefined();
+    expect(team.content).toContain('feishu-ux-review');
+    expect(team.content).toContain('ux-researcher');
+    expect(team.content).toContain('UX audit');
+  });
+
+  it('renders pending Agent Team tasks', () => {
+    const state: CardState = {
+      status: 'running',
+      userPrompt: 't',
+      responseText: '',
+      toolCalls: [],
+      teamState: {
+        name: 'demo',
+        teammates: [{ name: 'lead', status: 'idle' }],
+        tasks: [{ taskId: '1', subject: 'Plan work', status: 'pending', teammate: 'lead' }],
+      },
+    };
+    const json = JSON.parse(buildCard(state));
+    const team = json.elements.find(
+      (e: any) => e.tag === 'markdown' && typeof e.content === 'string' && /Team/.test(e.content),
+    );
+    expect(team).toBeDefined();
+    expect(team.content).toContain('1 pending');
+    expect(team.content).toContain('Plan work');
   });
 });
 
 describe('buildHelpCard', () => {
-  it('returns valid v2 card JSON', () => {
+  it('returns valid card JSON', () => {
     const json = JSON.parse(buildHelpCard());
-    expect(json.schema).toBe('2.0');
     expect(json.header.title.content).toContain('Help');
-    expect(json.body.elements.length).toBeGreaterThan(0);
+    expect(json.elements.length).toBeGreaterThan(0);
   });
 });
 
 describe('buildStatusCard', () => {
   it('shows session info', () => {
     const json = JSON.parse(buildStatusCard('user123', '/home/user/project', 'sess-abc-12345678', true));
-    expect(json.schema).toBe('2.0');
-    const md = json.body.elements[0].content;
+    const md = json.elements[0].content;
     expect(md).toContain('user123');
     expect(md).toContain('/home/user/project');
     expect(md).toContain('sess-abc');
@@ -148,111 +281,17 @@ describe('buildStatusCard', () => {
 
   it('shows no session', () => {
     const json = JSON.parse(buildStatusCard('user', '/home', undefined, false));
-    const md = json.body.elements[0].content;
+    const md = json.elements[0].content;
     expect(md).toContain('None');
     expect(md).toContain('No');
   });
 });
 
 describe('buildTextCard', () => {
-  it('builds simple text card with v2 structure', () => {
+  it('builds simple text card', () => {
     const json = JSON.parse(buildTextCard('Title', 'Some content', 'green'));
-    expect(json.schema).toBe('2.0');
     expect(json.header.template).toBe('green');
     expect(json.header.title.content).toBe('Title');
-    expect(json.body.elements[0].content).toBe('Some content');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// optimizeMarkdownStyle
-// ---------------------------------------------------------------------------
-
-describe('optimizeMarkdownStyle', () => {
-  it('demotes headings when H1-H3 are present', () => {
-    const input = '# Title\n## Section\n### Sub\ntext';
-    const result = optimizeMarkdownStyle(input);
-    expect(result).toContain('#### Title');
-    expect(result).toContain('##### Section');
-    expect(result).toContain('##### Sub');
-  });
-
-  it('does not demote headings when only H4+ are present', () => {
-    const input = '#### Already small\n##### Tiny';
-    const result = optimizeMarkdownStyle(input);
-    expect(result).toContain('#### Already small');
-    expect(result).toContain('##### Tiny');
-  });
-
-  it('adds <br> spacing around tables for cardVersion >= 2', () => {
-    const input = 'Some text\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nMore text';
-    const result = optimizeMarkdownStyle(input, 2);
-    expect(result).toContain('<br>');
-  });
-
-  it('does not add <br> for cardVersion 1', () => {
-    const input = 'Some text\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nMore text';
-    const result = optimizeMarkdownStyle(input, 1);
-    expect(result).not.toContain('<br>');
-  });
-
-  it('protects code block content from heading demotion', () => {
-    const input = '# Title\n\n```\n# Not a heading\n## Also not\n```\n\nEnd';
-    const result = optimizeMarkdownStyle(input);
-    expect(result).toContain('#### Title');
-    // Code block content should be preserved
-    expect(result).toContain('# Not a heading');
-    expect(result).toContain('## Also not');
-  });
-
-  it('compresses excessive blank lines', () => {
-    const input = 'A\n\n\n\n\nB';
-    const result = optimizeMarkdownStyle(input);
-    expect(result).toBe('A\n\nB');
-  });
-
-  it('strips invalid image keys', () => {
-    const input = '![alt](https://example.com/img.png)\n![ok](img_abc123)';
-    const result = optimizeMarkdownStyle(input);
-    expect(result).not.toContain('https://example.com');
-    expect(result).toContain('![ok](img_abc123)');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// sanitizeTextForCard
-// ---------------------------------------------------------------------------
-
-describe('sanitizeTextForCard', () => {
-  const makeTable = (label: string) =>
-    `| ${label} | Value |\n|---|---|\n| a | 1 |`;
-
-  it('passes through text with tables within limit', () => {
-    const text = `${makeTable('T1')}\n\n${makeTable('T2')}\n\n${makeTable('T3')}`;
-    expect(sanitizeTextForCard(text)).toBe(text);
-  });
-
-  it('wraps excess tables in code blocks', () => {
-    const tables = Array.from({ length: 5 }, (_, i) => makeTable(`T${i + 1}`));
-    const text = tables.join('\n\n');
-    const result = sanitizeTextForCard(text);
-
-    // First 3 tables should remain as markdown tables
-    const remainingTables = findMarkdownTablesOutsideCodeBlocks(result);
-    expect(remainingTables.length).toBe(3);
-
-    // Tables 4 and 5 should be wrapped in code blocks
-    expect(result).toContain('```\n| T4');
-    expect(result).toContain('```\n| T5');
-  });
-
-  it('ignores tables inside code blocks', () => {
-    const text = '```\n| A | B |\n|---|---|\n| 1 | 2 |\n```';
-    expect(sanitizeTextForCard(text)).toBe(text);
-  });
-
-  it('returns text unchanged when no tables exist', () => {
-    const text = 'Just some plain text without tables.';
-    expect(sanitizeTextForCard(text)).toBe(text);
+    expect(json.elements[0].content).toBe('Some content');
   });
 });

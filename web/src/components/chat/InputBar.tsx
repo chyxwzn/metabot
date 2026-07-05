@@ -56,7 +56,7 @@ export function InputBar({ connected, isRunning, onSend, onStop, onStartCall, ca
   const touchStartYRef = useRef(0);
   const cancelledRef = useRef(false);
   const durationTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
-  const partialTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  const partialTimerRef = useRef<ReturnType<typeof setTimeout> | ReturnType<typeof setInterval> | undefined>(undefined);
   const partialBusyRef = useRef(false);
   const recordingRef = useRef(false); // guard against double-start
 

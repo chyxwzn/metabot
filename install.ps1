@@ -1,14 +1,52 @@
 # MetaBot Installer for Windows PowerShell
-# Usage: irm https://raw.githubusercontent.com/xvirobotics/metabot/main/install.ps1 | iex
+# Usage:
+#   git clone https://github.com/xvirobotics/metabot.git $env:USERPROFILE\metabot
+#   cd $env:USERPROFILE\metabot
+#   .\install.ps1
+#   # Optional: .\install.ps1 -Dir C:\opt\metabot
+#   # Optional: $env:METABOT_HOME = "C:\opt\metabot"; .\install.ps1
 #Requires -Version 5.1
 
+[CmdletBinding()]
+param(
+    [Alias('d', 'InstallDir')]
+    [string]$Dir = "",
+
+    [switch]$Help
+)
+
 $ErrorActionPreference = "Stop"
+
+if ($Help) {
+    @"
+MetaBot Installer (Windows)
+
+Usage:
+  git clone https://github.com/xvirobotics/metabot.git
+  cd metabot
+  .\install.ps1 [-Dir <path>]
+
+Parameters:
+  -Dir, -d <path>     Install MetaBot to <path>.
+                      Priority: -Dir > `$env:METABOT_HOME > interactive prompt.
+                      Default: `$env:USERPROFILE\metabot
+  -Help               Show this help and exit.
+
+Examples:
+  .\install.ps1
+  .\install.ps1 -Dir C:\opt\metabot
+  `$env:METABOT_HOME = "C:\opt\metabot"; .\install.ps1
+"@ | Write-Host
+    exit 0
+}
 
 # ============================================================================
 # Configuration defaults
 # ============================================================================
 $MetabotRepo = if ($env:METABOT_REPO) { $env:METABOT_REPO } else { "https://github.com/xvirobotics/metabot.git" }
-$MetabotHome = if ($env:METABOT_HOME) { $env:METABOT_HOME } else { Join-Path $env:USERPROFILE "metabot" }
+# $MetabotHome is resolved later (Phase 0.5) — priority: -Dir > env > prompt > default.
+$DefaultMetabotHome = Join-Path $env:USERPROFILE "metabot"
+$MetabotHome = $null
 
 # ============================================================================
 # Helper functions (colors via Write-Host -ForegroundColor)
@@ -103,6 +141,51 @@ if ($PSVer.Major -lt 5 -or ($PSVer.Major -eq 5 -and $PSVer.Minor -lt 1)) {
     Write-Err "PowerShell 5.1+ is required. Current: $PSVer"
     exit 1
 }
+
+# ============================================================================
+# Phase 0.5: Resolve install directory
+# Priority: -Dir parameter > $env:METABOT_HOME > interactive prompt > default.
+# ============================================================================
+Write-Step "Phase 0.5: Choose install directory"
+
+if ($Dir) {
+    $MetabotHome = $Dir
+    Write-Info "Using install directory from -Dir: $MetabotHome"
+} elseif ($env:METABOT_HOME) {
+    $MetabotHome = $env:METABOT_HOME
+    Write-Info "Using install directory from `$env:METABOT_HOME: $MetabotHome"
+} else {
+    Write-Host ""
+    Write-Host "Where should MetaBot be installed?" -ForegroundColor White
+    Write-Host "  (Override later with -Dir or `$env:METABOT_HOME.)"
+    $MetabotHome = Read-Input "Install directory" $DefaultMetabotHome
+}
+
+# Expand a leading ~ to $env:USERPROFILE.
+if ($MetabotHome.StartsWith("~")) {
+    $MetabotHome = Join-Path $env:USERPROFILE ($MetabotHome.Substring(1).TrimStart('\','/'))
+}
+
+# Require a rooted path so all later $MetabotHome references are unambiguous.
+if (-not [System.IO.Path]::IsPathRooted($MetabotHome)) {
+    Write-Err "Install path must be absolute, got: $MetabotHome"
+    exit 1
+}
+
+# Refuse a few obviously-bad targets that would clobber the user's profile or a system root.
+$normalized = $MetabotHome.TrimEnd('\','/')
+$forbidden = @(
+    $env:USERPROFILE.TrimEnd('\','/'),
+    $env:SystemDrive,                          # e.g. "C:"
+    (Join-Path $env:SystemDrive 'Users').TrimEnd('\','/'),
+    (Join-Path $env:SystemDrive 'Windows').TrimEnd('\','/')
+) | ForEach-Object { $_.TrimEnd('\','/') }
+if ($forbidden -contains $normalized -or $normalized -eq '') {
+    Write-Err "Refusing to install directly into $MetabotHome — pick a dedicated subdirectory."
+    exit 1
+}
+
+Write-Success "Install directory: $MetabotHome"
 
 # ============================================================================
 # Phase 1: Check prerequisites
@@ -207,7 +290,20 @@ if (Test-Path (Join-Path $MetabotHome ".git")) {
     Write-Info "Existing installation found, pulling latest..."
     Push-Location $MetabotHome
     $OldHead = git rev-parse HEAD
-    try { git pull --ff-only } catch { Write-Warn "git pull failed, continuing with existing code" }
+    git pull --ff-only
+    if ($LASTEXITCODE -ne 0) {
+        Pop-Location
+        Write-Err "git pull --ff-only failed at $MetabotHome."
+        Write-Err "Your checkout has diverged from origin or has uncommitted changes."
+        Write-Err "Continuing with stale code would silently break later phases (e.g. Phase 6 'skill not found')."
+        Write-Err ""
+        Write-Err "Fix one of these and re-run install.ps1:"
+        Write-Err "  - Inspect: cd $MetabotHome; git status; git log --oneline -5"
+        Write-Err "  - Stash & retry:    cd $MetabotHome; git stash; git pull --ff-only"
+        Write-Err "  - Reset to origin (DESTROYS local commits/edits):"
+        Write-Err "      cd $MetabotHome; git fetch origin; git reset --hard origin/main"
+        exit 1
+    }
     $NewHead = git rev-parse HEAD
 
     # Re-exec with updated install.ps1 if it changed
@@ -488,15 +584,26 @@ Write-Step "Phase 6: Installing skills and setting up workspace"
 $SkillsDir = Join-Path $env:USERPROFILE ".claude\skills"
 New-Item -ItemType Directory -Path $SkillsDir -Force | Out-Null
 
-# Install metaskill
-Write-Info "Installing metaskill skill..."
-$metaskillDir = Join-Path $SkillsDir "metaskill\flows"
-New-Item -ItemType Directory -Path $metaskillDir -Force | Out-Null
-Copy-Item (Join-Path $MetabotHome "src\skills\metaskill\SKILL.md") (Join-Path $SkillsDir "metaskill\SKILL.md") -Force
-Copy-Item (Join-Path $MetabotHome "src\skills\metaskill\flows\team.md") (Join-Path $SkillsDir "metaskill\flows\team.md") -Force
-Copy-Item (Join-Path $MetabotHome "src\skills\metaskill\flows\agent.md") (Join-Path $SkillsDir "metaskill\flows\agent.md") -Force
-Copy-Item (Join-Path $MetabotHome "src\skills\metaskill\flows\skill.md") (Join-Path $SkillsDir "metaskill\flows\skill.md") -Force
-Write-Success "metaskill skill installed -> $(Join-Path $SkillsDir 'metaskill')"
+# Sanity check: the bundled skill tree must exist in the checked-out repo.
+# If it's missing, the user's checkout is stale (predates the skill bundling
+# commits) — fail with a clear message instead of cryptic Copy-Item errors.
+$SkillSentinel = Join-Path $MetabotHome "src\skills\metabot\SKILL.md"
+if (-not (Test-Path $SkillSentinel)) {
+    Write-Err "Bundled skill source not found at: $SkillSentinel"
+    Write-Err "Your $MetabotHome checkout appears to be stale or incomplete."
+    Write-Err "Try: cd $MetabotHome; git fetch origin; git reset --hard origin/main"
+    Write-Err "(WARNING: 'git reset --hard' discards uncommitted local changes.)"
+    exit 1
+}
+
+# Clean up legacy metaskill skill if present — no longer installed by default.
+# Users who still want the agent-team generator can copy it back from
+# $MetabotHome\src\skills\metaskill\ (the source files remain bundled in the repo).
+$LegacyMetaskillDir = Join-Path $SkillsDir "metaskill"
+if (Test-Path $LegacyMetaskillDir) {
+    Remove-Item $LegacyMetaskillDir -Recurse -Force
+    Write-Info "Removed legacy metaskill skill from $SkillsDir (now opt-in -- see src\skills\metaskill\)"
+}
 
 # Install metamemory skill
 Write-Info "Installing metamemory skill..."
@@ -561,7 +668,11 @@ if (-not $SkipConfig) {
 if ($DeployWorkDir) {
     $SkillsDest = Join-Path $DeployWorkDir ".claude\skills"
 
-    $deploySkills = @("metaskill", "metamemory", "metabot", "voice", "skill-hub")
+    # metaskill (agent-team generator) and metaschedule (persistent server-side
+    # scheduler) are no longer deployed by default -- copy them from
+    # $MetabotHome\src\skills\ if needed. CC native CronCreate / /loop already
+    # cover ad-hoc, session-scoped scheduling.
+    $deploySkills = @("metamemory", "metabot", "voice", "skill-hub")
     if ($HasFeishu) { $deploySkills += "feishu-doc" }
 
     foreach ($skill in $deploySkills) {
@@ -590,7 +701,7 @@ New-Item -ItemType Directory -Path $LocalBin -Force | Out-Null
 
 $HasBash = Test-Command "bash"
 
-$cliTools = @("mm", "mb", "metabot")
+$cliTools = @("metabot")
 if ($HasFeishu) { $cliTools += "fd" }
 
 if ($HasBash) {
@@ -605,26 +716,18 @@ if ($HasBash) {
             if ($ApiSecret) {
                 (Get-Content $scriptPath -Raw) -replace 'changeme', $ApiSecret | Set-Content $scriptPath -NoNewline
             }
-            if ($ApiPort -and $cli -eq "mb") {
-                (Get-Content $scriptPath -Raw) -replace '9100', $ApiPort | Set-Content $scriptPath -NoNewline
-            }
 
-            # Create .cmd wrapper for Windows (calls Node.js version of mb/mb.js)
-            if ($cli -eq "mb" -or $cli -eq "mm") {
-                # Copy Node.js implementation alongside bash script
-                $jsName = if ($cli -eq "mb") { "mb.js" } else { "mm.js" }
-                $srcJs = Join-Path $MetabotHome "bin\$jsName"
-                if (Test-Path $srcJs) {
-                    Copy-Item $srcJs (Join-Path $LocalBin $jsName) -Force
-                }
-                # .cmd wrapper calls node directly (no bash needed)
-                $cmdContent = "@echo off`nnode ""%~dp0$jsName"" %*"
-                $cmdContent | Out-File -FilePath (Join-Path $LocalBin "$cli.cmd") -Encoding ascii -NoNewline
-            } else {
-                # metabot, fd use bash - convert Windows path to Unix path
-                $cmdContent = "@echo off`nfor /f ""tokens=*"" %%i in ('powershell -NoProfile -Command ""`$p=`$env:USERPROFILE+'\\.local\\bin\\$cli';`$p=`$p -replace ""\\\\"" ,""/"";`$p=`$p -replace ""C:"" ,""/c"";Write-Host `$p""') do set ""BASH_PATH=%%i""`nendlocal & bash ""%BASH_PATH%"" %*"
-                $cmdContent | Out-File -FilePath (Join-Path $LocalBin "$cli.cmd") -Encoding ascii -NoNewline
-            }
+            # Create .cmd wrapper: @bash "%~dp0metabot" %*
+            $cmdContent = "@bash `"%~dp0$cli`" %*"
+            $cmdContent | Out-File -FilePath (Join-Path $LocalBin "$cli.cmd") -Encoding ascii -NoNewline
+        }
+    }
+
+    # Clean up legacy CLIs (mb deprecation shim + Phase 4 consolidation).
+    foreach ($legacy in @("mb", "mb.cmd", "mm", "mm.cmd", "mh", "mh.cmd", "mbcore", "mbcore.cmd")) {
+        $legacyPath = Join-Path $LocalBin $legacy
+        if (Test-Path $legacyPath) {
+            Remove-Item -Force $legacyPath
         }
     }
 
@@ -637,13 +740,22 @@ if ($HasBash) {
     }
 
     if ($HasFeishu) {
-        Write-Success "mm/mb/metabot/fd CLI tools installed to $LocalBin (with .cmd wrappers)"
+        Write-Success "metabot/fd CLI tools installed to $LocalBin (with .cmd wrappers)"
     } else {
-        Write-Success "mm/mb/metabot CLI tools installed to $LocalBin (with .cmd wrappers)"
+        Write-Success "metabot CLI installed to $LocalBin (with .cmd wrapper)"
     }
 } else {
-    Write-Warn "Git Bash not found. CLI tools (mm, mb, metabot) require bash."
+    Write-Warn "Git Bash not found. The metabot CLI requires bash."
     Write-Warn "Install Git for Windows (https://git-scm.com) to enable CLI tools."
+}
+
+# Persist METABOT_HOME for non-default install paths so the CLI tool
+# (metabot) can find the install in new shell sessions. The CLI falls
+# back to ~/metabot, so we only need to persist when it differs.
+if ($MetabotHome -ne $DefaultMetabotHome) {
+    [System.Environment]::SetEnvironmentVariable("METABOT_HOME", $MetabotHome, "User")
+    $env:METABOT_HOME = $MetabotHome
+    Write-Info "Persisted METABOT_HOME=$MetabotHome to user environment"
 }
 
 # ============================================================================
@@ -750,10 +862,8 @@ Write-Host "  Commands:" -ForegroundColor White
 Write-Host "    pm2 logs metabot          # View MetaBot logs"
 Write-Host "    pm2 restart metabot       # Restart MetaBot"
 Write-Host "    pm2 stop metabot          # Stop MetaBot"
-if ($MetamemoryInstalled) {
-    Write-Host "    mm search <query>         # Search MetaMemory"
-    Write-Host "    mm folders                # Browse knowledge tree"
-}
+Write-Host "    metabot memory search ... # Search MetaMemory (via metabot-core)"
+Write-Host "    metabot memory visibility # Per-bot default: /shared (public) vs /users (private); flip with 'visibility private|public'"
 
 Write-Host ""
 if (-not $SkipConfig) {

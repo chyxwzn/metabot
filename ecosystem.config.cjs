@@ -1,28 +1,17 @@
 const path = require('path');
-const fs = require('fs');
-
-// Load .env file and inject into process environment
-const dotenvPath = path.join(__dirname, '.env');
-if (fs.existsSync(dotenvPath)) {
-  const content = fs.readFileSync(dotenvPath, 'utf-8');
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eqIdx = trimmed.indexOf('=');
-    if (eqIdx < 0) continue;
-    const key = trimmed.slice(0, eqIdx).trim();
-    const val = trimmed.slice(eqIdx + 1).trim();
-    if (key && !process.env[key]) {
-      process.env[key] = val;
-    }
-  }
-}
 
 module.exports = {
   apps: [
     {
       name: 'metabot',
-      script: 'dist/index.js',
+      script: 'src/index.ts',
+      // Use `node --import tsx` instead of the tsx wrapper script.
+      // The wrapper in node_modules/.bin/tsx is a POSIX shell script with no
+      // .cmd shim, so PM2's child_process.spawn can't exec it on Windows
+      // (EINVAL). `node --import tsx` is tsx 4.x's documented cross-platform
+      // entrypoint and works identically on Linux/macOS/Windows.
+      interpreter: 'node',
+      interpreter_args: '--import tsx',
       cwd: __dirname,
 
       // Watch disabled — use `metabot restart` to apply code changes manually
@@ -40,10 +29,10 @@ module.exports = {
       merge_logs: true,
       log_date_format: 'YYYY-MM-DD HH:mm:ss',
 
-      // Environment — inherits .env loaded above
+      // Environment
       env: {
         NODE_ENV: 'production',
-        CLAUDE_MAX_TURNS: '',
+        CLAUDE_MAX_TURNS: '',  // unlimited turns (override any inherited shell env)
       },
     },
   ],

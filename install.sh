@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # MetaBot Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/xvirobotics/metabot/main/install.sh | bash
+# Usage:
+#   git clone https://github.com/xvirobotics/metabot.git ~/metabot
+#   cd ~/metabot && bash install.sh
+#   # Optional: METABOT_HOME=/opt/metabot bash install.sh
 set -euo pipefail
 
 # ============================================================================
@@ -14,9 +17,58 @@ else
 fi
 
 # ============================================================================
+# Parse CLI arguments
+# ============================================================================
+INSTALL_DIR_ARG=""
+print_usage() {
+  cat <<'USAGE'
+MetaBot Installer
+
+Usage:
+  bash install.sh [OPTIONS]
+  curl -fsSL <url> | bash -s -- [OPTIONS]
+
+Options:
+  -d, --dir <path>     Install MetaBot to <path>.
+                       Priority: --dir > METABOT_HOME env var > interactive prompt.
+                       Default: $HOME/metabot
+  -h, --help           Show this help and exit.
+
+Examples:
+  bash install.sh
+  bash install.sh --dir /opt/metabot
+  bash install.sh -d ~/projects/metabot
+  METABOT_HOME=/opt/metabot bash install.sh
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -d|--dir)
+      [[ $# -ge 2 ]] || { echo "Error: $1 requires a path argument" >&2; exit 1; }
+      INSTALL_DIR_ARG="$2"
+      shift 2
+      ;;
+    --dir=*)
+      INSTALL_DIR_ARG="${1#--dir=}"
+      shift
+      ;;
+    -h|--help)
+      print_usage
+      exit 0
+      ;;
+    *)
+      echo "Warning: unknown argument '$1'" >&2
+      shift
+      ;;
+  esac
+done
+
+# ============================================================================
 # Configuration defaults
 # ============================================================================
-METABOT_HOME="${METABOT_HOME:-$HOME/metabot}"
+# METABOT_HOME is resolved later (Phase 0.5) — priority: --dir > env var > prompt > default.
+DEFAULT_METABOT_HOME="$HOME/metabot"
 METABOT_REPO="${METABOT_REPO:-https://github.com/xvirobotics/metabot.git}"
 
 # ============================================================================
@@ -132,6 +184,43 @@ sed_i() {
 }
 
 # ============================================================================
+# Phase 0.5: Resolve install directory
+# Priority: --dir CLI arg > METABOT_HOME env var > interactive prompt > default.
+# ============================================================================
+step "Phase 0.5: Choose install directory"
+
+if [[ -n "$INSTALL_DIR_ARG" ]]; then
+  METABOT_HOME="$INSTALL_DIR_ARG"
+  info "Using install directory from --dir: $METABOT_HOME"
+elif [[ -n "${METABOT_HOME:-}" ]]; then
+  info "Using install directory from METABOT_HOME env: $METABOT_HOME"
+else
+  echo ""
+  echo -e "${BOLD}Where should MetaBot be installed?${NC}"
+  echo "  (You can override later with the METABOT_HOME env var or --dir flag.)"
+  prompt_input METABOT_HOME "Install directory" "$DEFAULT_METABOT_HOME"
+fi
+
+# Expand a leading ~ to $HOME (avoids eval; safe with spaces).
+METABOT_HOME="${METABOT_HOME/#\~/$HOME}"
+
+# Require an absolute path so all later $METABOT_HOME references are unambiguous.
+if [[ "$METABOT_HOME" != /* ]]; then
+  error "Install path must be absolute, got: $METABOT_HOME"
+  exit 1
+fi
+
+# Refuse a few obviously-bad targets that would clobber the user's home or root.
+case "$METABOT_HOME" in
+  /|/root|/home|/Users|"$HOME")
+    error "Refusing to install directly into $METABOT_HOME — pick a dedicated subdirectory."
+    exit 1
+    ;;
+esac
+
+success "Install directory: $METABOT_HOME"
+
+# ============================================================================
 # Phase 1: Check prerequisites
 # ============================================================================
 step "Phase 1: Checking prerequisites"
@@ -236,11 +325,30 @@ fi
 # ============================================================================
 step "Phase 2: Setting up MetaBot at ${METABOT_HOME}"
 
-if [[ -d "$METABOT_HOME/.git" ]]; then
+if [[ "${METABOT_SKIP_GIT:-0}" == "1" ]]; then
+  # Set by the metabot-core bootstrap (packages/server/install/bootstrap.sh),
+  # which downloads + extracts the bot-host tarball into $METABOT_HOME before
+  # exec'ing this script. The git clone/pull phase is unnecessary in that
+  # mode (no remote — refresh model is to re-run the bootstrap). The Phase 6
+  # SKILL_SENTINEL check still catches a corrupt/incomplete extraction.
+  info "Pre-staged from tarball (METABOT_SKIP_GIT=1), skipping git phase."
+  cd "$METABOT_HOME"
+elif [[ -d "$METABOT_HOME/.git" ]]; then
   info "Existing installation found, pulling latest..."
   cd "$METABOT_HOME"
   OLD_HEAD="$(git rev-parse HEAD)"
-  git pull --ff-only || warn "git pull failed, continuing with existing code"
+  if ! git pull --ff-only; then
+    error "git pull --ff-only failed at $METABOT_HOME."
+    error "Your checkout has diverged from origin or has uncommitted changes."
+    error "Continuing with stale code would silently break later phases (e.g. Phase 6 'skill not found')."
+    error ""
+    error "Fix one of these and re-run install.sh:"
+    error "  - Inspect:        cd $METABOT_HOME && git status && git log --oneline -5"
+    error "  - Stash & retry:  cd $METABOT_HOME && git stash && git pull --ff-only"
+    error "  - Reset to origin (DESTROYS local commits/edits):"
+    error "      cd $METABOT_HOME && git fetch origin && git reset --hard origin/main"
+    exit 1
+  fi
   NEW_HEAD="$(git rev-parse HEAD)"
   # Re-exec with the updated install.sh if it changed (avoids running stale code from memory)
   if [[ "$OLD_HEAD" != "$NEW_HEAD" && -z "${METABOT_REEXEC:-}" ]]; then
@@ -261,13 +369,102 @@ success "MetaBot code ready at ${METABOT_HOME}"
 step "Phase 3: Installing dependencies"
 
 cd "$METABOT_HOME"
-info "Running npm install..."
-npm install --production=false
-success "npm dependencies installed"
+# Bridge hosts only need:
+#   - root bridge runtime + devDeps (tsx for PM2, tsc for build, vitest)
+#   - @xvirobotics/cli + cli-core + metamemory + skill-hub (the four thin CLI
+#     workspaces — @xvirobotics/cli depends on the other three)
+# The heavy workspaces — @xvirobotics/metabot-core-server (better-sqlite3) and
+# @xvirobotics/metabot-core-web-ui (react, react-dom, react-router-dom, …) —
+# run on the central ECS, not bot hosts. Excluding them here keeps deployed
+# bot installs lean and avoids the better-sqlite3 native rebuild on hosts
+# that never query the central DB.
+info "Running npm install (bridge runtime + CLI workspaces; server/web-ui excluded)..."
+npm install --include=dev \
+  --workspace=@xvirobotics/cli \
+  --workspace=@xvirobotics/cli-core \
+  --workspace=@xvirobotics/metamemory \
+  --workspace=@xvirobotics/skill-hub \
+  --include-workspace-root
+success "npm dependencies installed (CLI workspaces, no server/web-ui)"
 
 # Helper: npm install -g with sudo fallback
 npm_install_global() {
   npm install -g "$@" 2>/dev/null || sudo -n npm install -g "$@" 2>/dev/null || sudo npm install -g "$@"
+}
+
+codex_config_has_features_table() {
+  local config="$1"
+  [[ -f "$config" ]] && grep -Eq '^[[:space:]]*\[features\][[:space:]]*$' "$config"
+}
+
+codex_config_feature_is_set() {
+  local config="$1"
+  local key="$2"
+  [[ -f "$config" ]] || return 1
+  awk -v key="$key" '
+    /^[[:space:]]*\[features\][[:space:]]*$/ { in_features=1; next }
+    /^[[:space:]]*\[[^]]+\][[:space:]]*$/ { in_features=0 }
+    in_features && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" { found=1 }
+    END { exit(found ? 0 : 1) }
+  ' "$config"
+}
+
+codex_config_set_feature_default() {
+  local config="$1"
+  local key="$2"
+  local value="$3"
+
+  if codex_config_feature_is_set "$config" "$key"; then
+    return 0
+  fi
+
+  if ! codex_config_has_features_table "$config"; then
+    {
+      echo ""
+      echo "[features]"
+      echo "${key} = ${value}"
+    } >> "$config"
+    return 0
+  fi
+
+  local tmp
+  tmp="$(mktemp)"
+  awk -v key="$key" -v value="$value" '
+    /^[[:space:]]*\[features\][[:space:]]*$/ {
+      in_features=1
+      print
+      next
+    }
+    in_features && /^[[:space:]]*\[[^]]+\][[:space:]]*$/ {
+      if (!inserted) {
+        print key " = " value
+        inserted=1
+      }
+      in_features=0
+    }
+    { print }
+    END {
+      if (in_features && !inserted) {
+        print key " = " value
+      }
+    }
+  ' "$config" > "$tmp"
+  mv "$tmp" "$config"
+}
+
+ensure_codex_agent_defaults() {
+  local codex_home="${CODEX_HOME:-$HOME/.codex}"
+  local config="$codex_home/config.toml"
+  mkdir -p "$codex_home/skills" "$codex_home/memories" "$codex_home/agents"
+  touch "$config"
+  chmod 600 "$config" 2>/dev/null || true
+
+  codex_config_set_feature_default "$config" "multi_agent" "true"
+  codex_config_set_feature_default "$config" "memories" "true"
+  codex_config_set_feature_default "$config" "guardian_approval" "true"
+  codex_config_set_feature_default "$config" "prevent_idle_sleep" "true"
+
+  success "Codex agent defaults ensured in $config (multi_agent, memories, guardian_approval, prevent_idle_sleep)"
 }
 
 if ! command -v pm2 &>/dev/null; then
@@ -278,6 +475,9 @@ else
   success "PM2 already installed"
 fi
 
+# Claude and Kimi CLI installs are driven by the engine choice in Phase 4.
+# We still ensure the Claude CLI is present as a default convenience, since
+# most users start with Claude and may mix engines later.
 if command -v claude &>/dev/null; then
   success "Claude CLI found: $(command -v claude)"
 else
@@ -289,6 +489,36 @@ else
     warn "Claude CLI install failed. Install manually: sudo npm install -g @anthropic-ai/claude-code"
   fi
 fi
+
+# Install uv + kimi-cli helper. Used by the Kimi engine path below.
+install_kimi_cli() {
+  if command -v kimi &>/dev/null; then
+    success "Kimi CLI found: $(command -v kimi)"
+    return 0
+  fi
+  # Need uv first (kimi-cli is a Python tool distributed via uv)
+  if ! command -v uv &>/dev/null; then
+    info "Installing uv (required by kimi-cli)..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1 || true
+    # uv installs to ~/.local/bin — make sure it's on PATH for this script
+    export PATH="$HOME/.local/bin:$PATH"
+    if ! command -v uv &>/dev/null; then
+      warn "uv install failed. Install manually from https://astral.sh/uv and re-run."
+      return 1
+    fi
+    success "uv installed: $(uv --version)"
+  fi
+  info "Installing kimi-cli via uv..."
+  if uv tool install kimi-cli 2>&1 | tail -3; then
+    export PATH="$HOME/.local/bin:$PATH"
+    if command -v kimi &>/dev/null; then
+      success "Kimi CLI installed: $(command -v kimi)"
+      return 0
+    fi
+  fi
+  warn "Kimi CLI install failed. Install manually: uv tool install kimi-cli"
+  return 1
+}
 
 # ============================================================================
 # Phase 4: Interactive configuration
@@ -312,18 +542,63 @@ if [[ "$SKIP_CONFIG" == "false" ]]; then
   mkdir -p "$WORK_DIR"
   success "Working directory: ${WORK_DIR}"
 
-  # ------ 4b: Claude AI authentication ------
+  # ------ 4b: Engine selection ------
   echo ""
-  echo -e "${BOLD}Claude AI Authentication:${NC}"
-  echo "  1) Claude Code Subscription (OAuth — run 'claude login' after install)"
-  echo "  2) Anthropic API Key (sk-ant-...)"
-  echo "  3) Third-party provider (Kimi/Moonshot, DeepSeek, GLM, etc.)"
-  prompt_choice AUTH_CHOICE "1"
+  echo -e "${BOLD}Agent Engine:${NC}"
+  echo "  1) Claude Code (Anthropic)"
+  echo "  2) Kimi (Moonshot AI — requires kimi-cli login, uses your subscription)"
+  echo "  3) Codex CLI (OpenAI — requires codex login, uses your ChatGPT subscription)"
+  prompt_choice ENGINE_CHOICE "1"
 
+  BOT_ENGINE="claude"
   CLAUDE_AUTH_ENV_LINES=""
   CLAUDE_AUTH_METHOD="subscription"
 
+  if [[ "$ENGINE_CHOICE" == "2" ]]; then
+    BOT_ENGINE="kimi"
+    CLAUDE_AUTH_METHOD="kimi"
+    echo ""
+    info "Installing kimi-cli..."
+    install_kimi_cli || warn "Continuing despite kimi-cli install failure — you can install it later."
+    info "After install, run 'kimi login' in a separate terminal to authenticate."
+    # Skip the Claude provider prompt entirely for Kimi — it has its own auth.
+    AUTH_CHOICE="kimi"
+  elif [[ "$ENGINE_CHOICE" == "3" ]]; then
+    BOT_ENGINE="codex"
+    CLAUDE_AUTH_METHOD="codex"
+    echo ""
+    if command -v codex &>/dev/null; then
+      success "Codex CLI found: $(command -v codex)"
+    else
+      info "Installing Codex CLI..."
+      npm_install_global @openai/codex
+      if command -v codex &>/dev/null; then
+        success "Codex CLI installed: $(command -v codex)"
+      else
+        warn "Codex CLI install failed. Install manually: sudo npm install -g @openai/codex"
+        warn "MetaBot will still be configured — install Codex + run 'codex login' before starting."
+      fi
+    fi
+    ensure_codex_agent_defaults
+    info "After install, run 'codex login' in a separate terminal to authenticate (or set OPENAI_API_KEY / configure a profile in ~/.codex/config.toml)."
+    info "Codex memories and multi-agent defaults are enabled in ~/.codex/config.toml; use 'codex features list' to inspect."
+    info "Note: Codex runs with approvalPolicy='never' and sandbox='workspace-write' by default — interactive tool approvals are not surfaced to IM."
+    # Skip the Claude provider prompt entirely for Codex — it has its own auth.
+    AUTH_CHOICE="codex"
+  else
+    # ------ 4b-claude: Claude AI authentication ------
+    echo ""
+    echo -e "${BOLD}Claude AI Authentication:${NC}"
+    echo "  1) Claude Code Subscription (OAuth — run 'claude login' after install)"
+    echo "  2) Anthropic API Key (sk-ant-...)"
+    echo "  3) Third-party provider (Kimi/Moonshot, DeepSeek, GLM, etc.)"
+    prompt_choice AUTH_CHOICE "1"
+  fi
+
   case "$AUTH_CHOICE" in
+    kimi|codex)
+      : # handled above
+      ;;
     1)
       CLAUDE_AUTH_METHOD="subscription"
       info "Using Claude Code Subscription. Run 'claude login' after install."
@@ -443,13 +718,27 @@ API_TIMEOUT_MS=600000"
   API_SECRET="$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | xxd -p | tr -d '\n' | head -c 64)"
   API_PORT="9100"
   LOG_LEVEL="info"
-  META_MEMORY_URL="http://localhost:8100"
 
   # Claude executable path
   CLAUDE_PATH=""
   if command -v claude &>/dev/null; then
     CLAUDE_PATH="$(command -v claude)"
   fi
+
+  # ------ 4e: metabot-core central service ------
+  echo ""
+  echo -e "${BOLD}metabot-core central service:${NC}"
+  echo "  MetaBot delegates MetaMemory / Skill Hub / Agents / T5T to a central"
+  echo "  metabot-core service — no local DB, no embedded server."
+  prompt_input METABOT_CORE_URL "metabot-core URL" "http://localhost:9200"
+
+  echo ""
+  info "Get your personal Bearer token:"
+  info "  - metabot-core generates one on first launch at ~/.metabot-core/token"
+  info "  - or open ${METABOT_CORE_URL}/cli and click 'Generate'"
+  info "  Paste the mt_... token below — or press Enter to configure later"
+  info "     (later: drop it into ${METABOT_HOME}/.env or ~/.metabot-core/token)"
+  prompt_secret METABOT_CORE_TOKEN "metabot-core Bearer token (blank = skip)"
 fi
 
 # ============================================================================
@@ -470,9 +759,22 @@ if [[ "$SKIP_CONFIG" == "false" ]]; then
     echo "API_PORT=${API_PORT}"
     echo "API_SECRET=${API_SECRET}"
     echo ""
-    echo "# Claude AI Authentication"
+    echo "# Agent Engine Authentication"
     if [[ "$CLAUDE_AUTH_METHOD" == "subscription" ]]; then
       echo "# Using Claude Code Subscription (OAuth). Run 'claude login' to authenticate."
+    elif [[ "$CLAUDE_AUTH_METHOD" == "kimi" ]]; then
+      echo "# Using Kimi CLI. Run 'kimi login' to authenticate."
+    elif [[ "$CLAUDE_AUTH_METHOD" == "codex" ]]; then
+      echo "# Using Codex CLI. Run 'codex login' to authenticate (or set OPENAI_API_KEY / configure ~/.codex/config.toml)."
+      echo "# CODEX_EXECUTABLE_PATH="
+      echo "# CODEX_APPROVAL_POLICY=never"
+      echo "# CODEX_SANDBOX=workspace-write"
+      echo "# install.sh also ensures ~/.codex/config.toml contains:"
+      echo "#   [features]"
+      echo "#   multi_agent = true"
+      echo "#   memories = true"
+      echo "#   guardian_approval = true"
+      echo "#   prevent_idle_sleep = true"
     elif [[ -n "${CLAUDE_AUTH_ENV_LINES:-}" ]]; then
       echo "$CLAUDE_AUTH_ENV_LINES"
     fi
@@ -486,8 +788,29 @@ if [[ "$SKIP_CONFIG" == "false" ]]; then
       echo "CLAUDE_EXECUTABLE_PATH=${CLAUDE_PATH}"
     fi
     echo ""
-    echo "# MetaMemory"
-    echo "META_MEMORY_URL=${META_MEMORY_URL}"
+    echo "# metabot-core central service (MetaMemory + Skill Hub + Agents + T5T)"
+    echo "METABOT_CORE_URL=${METABOT_CORE_URL}"
+    if [[ -n "${METABOT_CORE_TOKEN:-}" ]]; then
+      echo "METABOT_CORE_TOKEN=${METABOT_CORE_TOKEN}"
+    else
+      echo "# Token is at ~/.metabot-core/token on first launch, or ${METABOT_CORE_URL}/cli (Generate)"
+      echo "# Either paste it here OR save to ~/.metabot-core/token (chmod 600)"
+      echo "# METABOT_CORE_TOKEN="
+    fi
+    echo ""
+    echo "# Internal default env injection (do not commit real secrets)"
+    echo "# Priority: real process env > project .env > internal defaults."
+    echo "#   METABOT_DEFAULT_ENV_FILE, /etc/metabot/default.env, ~/.metabot/default.env, .env.defaults"
+    echo "# Recommended internal default.env for Feishu voice replies:"
+    echo "#   VOLCENGINE_TTS_APPID=..."
+    echo "#   VOLCENGINE_TTS_ACCESS_KEY=..."
+    echo "#   VOLCENGINE_TTS_RESOURCE_ID=volc.service_type.10029"
+    echo "#   METABOT_VOICE_REPLY_DEFAULT_ON=true"
+    echo "#   METABOT_VOICE_REPLY_PROVIDER=doubao"
+    echo "#   METABOT_VOICE_REPLY_MAX_CHARS=400"
+    echo "# Optional: spend a small number of LLM tokens to rewrite card text into a spoken decision brief."
+    echo "#   METABOT_VOICE_REPLY_SUMMARY_PROVIDER=openai"
+    echo "#   METABOT_VOICE_REPLY_SUMMARY_MODEL=gpt-4o-mini"
   } > "$METABOT_HOME/.env"
   chmod 600 "$METABOT_HOME/.env"
   success ".env generated"
@@ -500,25 +823,33 @@ if [[ "$SKIP_CONFIG" == "false" ]]; then
 
   if [[ "$SETUP_FEISHU" == "true" ]]; then
     FEISHU_BOTS_JSON=$(node -e "
-      console.log(JSON.stringify([{
+      const engine = process.argv[5];
+      const bot = {
         name: process.argv[1],
         feishuAppId: process.argv[2],
         feishuAppSecret: process.argv[3],
-        defaultWorkingDirectory: process.argv[4]
-      }], null, 2))
-    " "$BOT_NAME" "$FEISHU_APP_ID" "$FEISHU_APP_SECRET" "$WORK_DIR")
+        defaultWorkingDirectory: process.argv[4],
+      };
+      if (engine === 'kimi') { bot.engine = 'kimi'; bot.kimi = { thinking: true }; }
+      if (engine === 'codex') { bot.engine = 'codex'; bot.codex = { approvalPolicy: 'never', sandbox: 'workspace-write' }; }
+      console.log(JSON.stringify([bot], null, 2))
+    " "$BOT_NAME" "$FEISHU_APP_ID" "$FEISHU_APP_SECRET" "$WORK_DIR" "${BOT_ENGINE:-claude}")
   fi
 
   if [[ "$SETUP_TELEGRAM" == "true" ]]; then
     TG_NAME="$BOT_NAME"
     [[ "$SETUP_FEISHU" == "true" ]] && TG_NAME="${BOT_NAME}-telegram"
     TELEGRAM_BOTS_JSON=$(node -e "
-      console.log(JSON.stringify([{
+      const engine = process.argv[4];
+      const bot = {
         name: process.argv[1],
         telegramBotToken: process.argv[2],
-        defaultWorkingDirectory: process.argv[3]
-      }], null, 2))
-    " "$TG_NAME" "$TELEGRAM_BOT_TOKEN" "$WORK_DIR")
+        defaultWorkingDirectory: process.argv[3],
+      };
+      if (engine === 'kimi') { bot.engine = 'kimi'; bot.kimi = { thinking: true }; }
+      if (engine === 'codex') { bot.engine = 'codex'; bot.codex = { approvalPolicy: 'never', sandbox: 'workspace-write' }; }
+      console.log(JSON.stringify([bot], null, 2))
+    " "$TG_NAME" "$TELEGRAM_BOT_TOKEN" "$WORK_DIR" "${BOT_ENGINE:-claude}")
   fi
 
   if [[ "$SETUP_WECHAT" == "true" ]]; then
@@ -526,11 +857,15 @@ if [[ "$SKIP_CONFIG" == "false" ]]; then
     # Append suffix if other platforms are also configured
     [[ "$SETUP_FEISHU" == "true" || "$SETUP_TELEGRAM" == "true" ]] && WX_NAME="${BOT_NAME}-wechat"
     WECHAT_BOTS_JSON=$(node -e "
-      console.log(JSON.stringify([{
+      const engine = process.argv[3];
+      const bot = {
         name: process.argv[1],
-        defaultWorkingDirectory: process.argv[2]
-      }], null, 2))
-    " "$WX_NAME" "$WORK_DIR")
+        defaultWorkingDirectory: process.argv[2],
+      };
+      if (engine === 'kimi') { bot.engine = 'kimi'; bot.kimi = { thinking: true }; }
+      if (engine === 'codex') { bot.engine = 'codex'; bot.codex = { approvalPolicy: 'never', sandbox: 'workspace-write' }; }
+      console.log(JSON.stringify([bot], null, 2))
+    " "$WX_NAME" "$WORK_DIR" "${BOT_ENGINE:-claude}")
   fi
 
   node -e "
@@ -561,29 +896,40 @@ step "Phase 6: Installing skills and setting up workspace"
 SKILLS_DIR="$HOME/.claude/skills"
 mkdir -p "$SKILLS_DIR"
 
-# Install metaskill (bundled in src/skills/metaskill/)
-info "Installing metaskill skill..."
-mkdir -p "$SKILLS_DIR/metaskill/flows"
-cp "$METABOT_HOME/src/skills/metaskill/SKILL.md" "$SKILLS_DIR/metaskill/SKILL.md"
-cp "$METABOT_HOME/src/skills/metaskill/flows/team.md" "$SKILLS_DIR/metaskill/flows/team.md"
-cp "$METABOT_HOME/src/skills/metaskill/flows/agent.md" "$SKILLS_DIR/metaskill/flows/agent.md"
-cp "$METABOT_HOME/src/skills/metaskill/flows/skill.md" "$SKILLS_DIR/metaskill/flows/skill.md"
-success "metaskill skill installed → $SKILLS_DIR/metaskill"
-
-# Install metamemory skill (bundled in src/memory/skill/)
-info "Installing metamemory skill..."
-mkdir -p "$SKILLS_DIR/metamemory"
-cp "$METABOT_HOME/src/memory/skill/SKILL.md" "$SKILLS_DIR/metamemory/SKILL.md"
-# Clean up old skill location if it exists
-if [[ -d "$HOME/.claude/skills/memory" ]]; then
-  rm -rf "$HOME/.claude/skills/memory"
+# Sanity check: bundled skill tree must exist in the checked-out repo.
+# If it's missing, the user's checkout is stale (predates the skill bundling
+# commits) — fail with a clear message instead of cryptic cp errors.
+SKILL_SENTINEL="$METABOT_HOME/packages/skills/metabot/SKILL.md"
+if [[ ! -f "$SKILL_SENTINEL" ]]; then
+  error "Bundled skill source not found at: $SKILL_SENTINEL"
+  error "Your $METABOT_HOME checkout appears to be stale or incomplete."
+  error "Try: cd $METABOT_HOME && git fetch origin && git reset --hard origin/main"
+  error "(WARNING: 'git reset --hard' discards uncommitted local changes.)"
+  exit 1
 fi
-success "metamemory skill installed → $SKILLS_DIR/metamemory"
 
-# Install metabot skill (bundled in src/skills/metabot/)
+# Clean up legacy metaskill skill if present — no longer installed by default.
+# Users who still want the agent-team generator can copy it back from
+# $METABOT_HOME/src/skills/metaskill/ (the source files remain bundled in the repo).
+if [[ -d "$SKILLS_DIR/metaskill" ]]; then
+  rm -rf "$SKILLS_DIR/metaskill"
+  info "Removed legacy metaskill skill from $SKILLS_DIR (now opt-in — see src/skills/metaskill/)"
+fi
+
+# Clean up legacy skill bundles (Phase 4 consolidation: subsumed by unified
+# `metabot` skill that delegates memory/skills/agents/t5t to metabot-core).
+for legacy in metamemory skill-hub memory; do
+  if [[ -d "$SKILLS_DIR/$legacy" ]]; then
+    rm -rf "$SKILLS_DIR/$legacy"
+    info "Removed legacy $legacy skill (use \`metabot ${legacy/skill-hub/skills}\` instead)"
+  fi
+done
+
+# Install metabot skill (bundled in packages/skills/metabot/) — single unified
+# skill covering memory / skills / agents / t5t via the metabot-core CLI.
 info "Installing metabot skill..."
 mkdir -p "$SKILLS_DIR/metabot"
-cp "$METABOT_HOME/src/skills/metabot/SKILL.md" "$SKILLS_DIR/metabot/SKILL.md"
+cp "$METABOT_HOME/packages/skills/metabot/SKILL.md" "$SKILLS_DIR/metabot/SKILL.md"
 success "metabot skill installed → $SKILLS_DIR/metabot"
 
 # Install voice skill (bundled in src/skills/voice/)
@@ -591,12 +937,6 @@ info "Installing voice skill..."
 mkdir -p "$SKILLS_DIR/voice"
 cp "$METABOT_HOME/src/skills/voice/SKILL.md" "$SKILLS_DIR/voice/SKILL.md"
 success "voice skill installed → $SKILLS_DIR/voice"
-
-# Install skill-hub skill (bundled in src/skills/skill-hub/)
-info "Installing skill-hub skill..."
-mkdir -p "$SKILLS_DIR/skill-hub"
-cp "$METABOT_HOME/src/skills/skill-hub/SKILL.md" "$SKILLS_DIR/skill-hub/SKILL.md"
-success "skill-hub skill installed → $SKILLS_DIR/skill-hub"
 
 # Detect Feishu bots
 HAS_FEISHU=false
@@ -687,8 +1027,21 @@ fi
 if [[ -n "${DEPLOY_WORK_DIR:-}" ]]; then
   SKILLS_DEST="$DEPLOY_WORK_DIR/.claude/skills"
 
-  # Copy skills (common + lark-cli skills if Feishu)
-  DEPLOY_SKILLS="metaskill metamemory metabot voice skill-hub"
+  # Clean up legacy skill bundles from a previously-deployed workspace so the
+  # bot doesn't load stale skills after the Phase 4 consolidation.
+  for legacy in metamemory skill-hub; do
+    if [[ -d "$SKILLS_DEST/$legacy" ]]; then
+      rm -rf "$SKILLS_DEST/$legacy"
+      info "Removed legacy $legacy from $SKILLS_DEST"
+    fi
+  done
+
+  # Copy skills (common + lark-cli skills if Feishu).
+  # metaskill (agent-team generator) and metaschedule (persistent server-side
+  # scheduler) are no longer installed by default — copy them from
+  # $METABOT_HOME/src/skills/ if you want them. CC native CronCreate / /loop
+  # already cover ad-hoc, session-scoped scheduling.
+  DEPLOY_SKILLS="metabot voice"
   if [[ "$SETUP_LARK_CLI" == "true" ]]; then
     for lark_skill in lark-base lark-calendar lark-contact lark-doc lark-drive lark-event lark-im lark-mail lark-minutes lark-openapi-explorer lark-shared lark-sheets lark-skill-maker lark-task lark-vc lark-whiteboard lark-wiki lark-workflow-meeting-summary lark-workflow-standup-report; do
       [[ -d "$SKILLS_DIR/$lark_skill" ]] && DEPLOY_SKILLS="$DEPLOY_SKILLS $lark_skill"
@@ -702,234 +1055,133 @@ if [[ -n "${DEPLOY_WORK_DIR:-}" ]]; then
     fi
   done
 
-  # Deploy CLAUDE.md to working directory
+  # Deploy CLAUDE.md to working directory (+ AGENTS.md symlink for Kimi engine)
   if [[ -f "$METABOT_HOME/src/workspace/CLAUDE.md" ]]; then
     cp "$METABOT_HOME/src/workspace/CLAUDE.md" "$DEPLOY_WORK_DIR/CLAUDE.md"
     success "Deployed CLAUDE.md → $DEPLOY_WORK_DIR/CLAUDE.md"
+    # Kimi engine reads AGENTS.md not CLAUDE.md — symlink so both engines see the same doc
+    if [[ ! -e "$DEPLOY_WORK_DIR/AGENTS.md" ]]; then
+      (cd "$DEPLOY_WORK_DIR" && ln -s CLAUDE.md AGENTS.md 2>/dev/null) \
+        && success "Linked AGENTS.md → CLAUDE.md (for Kimi engine compatibility)" \
+        || warn "Could not create AGENTS.md symlink"
+    fi
   fi
 else
   warn "Could not determine working directory, skipping workspace deployment"
 fi
 
 # ============================================================================
-# Phase 7: MetaMemory (embedded in MetaBot)
+# Phase 7: Legacy MetaMemory cleanup (embedded MetaMemory removed in Phase 4)
 # ============================================================================
-step "Phase 7: MetaMemory"
+step "Phase 7: Legacy MetaMemory cleanup"
 
-METAMEMORY_INSTALLED=false
+info "MetaMemory is now served by metabot-core at ${METABOT_CORE_URL:-http://localhost:9200}."
+info "No local DB, no embedded server — the bridge talks to the central service via HTTP."
 
-info "MetaMemory is embedded in MetaBot (no separate server needed)."
-mkdir -p "${METABOT_HOME}/data"
-
-# Migrate existing database from standalone Python MetaMemory if found
-if [[ -f "$HOME/.metamemory-data/metamemory.db" && ! -f "$METABOT_HOME/data/metamemory.db" ]]; then
-  info "Migrating existing MetaMemory database..."
-  cp "$HOME/.metamemory-data/metamemory.db" "$METABOT_HOME/data/"
-  success "Database migrated from ~/.metamemory-data/"
-fi
-
-# Stop old standalone MetaMemory PM2 process if running
+# Stop old embedded/standalone MetaMemory PM2 process if it still exists.
 if pm2 describe metamemory &>/dev/null 2>&1; then
-  info "Stopping old standalone MetaMemory PM2 process..."
+  info "Stopping legacy MetaMemory PM2 process..."
   pm2 delete metamemory 2>/dev/null || true
-  success "Old MetaMemory process removed"
+  success "Legacy MetaMemory process removed"
 fi
 
-# Kill any process still occupying port 8100 (e.g. old Python uvicorn)
+# Free port 8100 if a stale embedded server is still listening.
 if command -v lsof &>/dev/null; then
   OLD_PID=$(lsof -ti :8100 2>/dev/null || true)
   if [[ -n "$OLD_PID" ]]; then
-    info "Killing old process on port 8100 (PID: $OLD_PID)..."
+    info "Killing leftover process on port 8100 (PID: $OLD_PID)..."
     kill "$OLD_PID" 2>/dev/null || true
     sleep 1
   fi
 fi
 
-METAMEMORY_INSTALLED=true
-success "MetaMemory will start automatically with MetaBot on port 8100"
+# Old standalone-Python MetaMemory data dir lingers harmlessly — leave it.
+if [[ -d "$HOME/.metamemory-data" ]]; then
+  info "Note: legacy ~/.metamemory-data/ left in place (safe to delete after data export)."
+fi
 
-# Install mm() shell shortcut for MetaMemory CLI
 BASH_ALIASES="$HOME/.bash_aliases"
-if ! grep -q 'mm()' "$BASH_ALIASES" 2>/dev/null; then
-  info "Installing mm() shell shortcut..."
-  cat >> "$BASH_ALIASES" << 'MMEOF'
 
-# MetaMemory shortcuts (installed by MetaBot)
-export MEMORY_URL="http://localhost:8100"
-export MEMORY_AUTH="Authorization: Bearer ${MEMORY_ADMIN_TOKEN:-${MEMORY_TOKEN:-${MEMORY_SECRET:-${API_SECRET:-changeme}}}}"
-
-mm() {
-  local cmd="${1:-help}"
-  shift 2>/dev/null
-  case "$cmd" in
-    search|s)
-      curl -s -H "$MEMORY_AUTH" "$MEMORY_URL/api/search?q=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$*'))")"
-      ;;
-    get|g)
-      curl -s -H "$MEMORY_AUTH" "$MEMORY_URL/api/documents/$1"
-      ;;
-    list|ls)
-      curl -s -H "$MEMORY_AUTH" "$MEMORY_URL/api/documents?folder_id=${1:-root}&limit=50"
-      ;;
-    folders|f)
-      curl -s -H "$MEMORY_AUTH" "$MEMORY_URL/api/folders"
-      ;;
-    create|c)
-      local title="$1"; shift
-      local content="$*"
-      curl -s -X POST "$MEMORY_URL/api/documents" \
-        -H "$MEMORY_AUTH" -H "Content-Type: application/json" \
-        -d "{\"title\":\"$title\",\"folder_id\":\"root\",\"content\":\"$content\"}"
-      ;;
-    health|h)
-      curl -s -H "$MEMORY_AUTH" "$MEMORY_URL/api/health"
-      ;;
-    *)
-      echo "mm - MetaMemory CLI"
-      echo "  mm search <query>       - Search documents"
-      echo "  mm get <doc_id>         - Get document by ID"
-      echo "  mm list [folder_id]     - List documents (default: root)"
-      echo "  mm folders              - List folder tree"
-      echo "  mm create <title> <md>  - Create a document"
-      echo "  mm health               - Health check"
-      ;;
-  esac
-}
-MMEOF
-  # Patch the actual API_SECRET into the file
-  if [[ -n "${API_SECRET:-}" ]]; then
-    sed_i "s|\${API_SECRET:-changeme}|${API_SECRET}|g" "$BASH_ALIASES"
-  fi
-  success "mm() shortcut installed"
-else
-  info "mm() shortcut already exists, skipping"
+# Strip the legacy mm() shortcut from a pre-existing ~/.bash_aliases — it
+# targets localhost:8100 which no longer exists after the Phase 4 pivot.
+# Use `metabot memory ...` instead (delegates to metabot-core).
+if [[ -f "$BASH_ALIASES" ]] && grep -q '^mm()' "$BASH_ALIASES" 2>/dev/null; then
+  info "Removing legacy mm() shortcut from $BASH_ALIASES (use \`metabot memory ...\` now)..."
+  # Delete the MetaMemory shortcuts block: from "# MetaMemory shortcuts (installed by MetaBot)"
+  # down to and including the closing "}" of mm(). Then drop the matching export lines.
+  python3 - "$BASH_ALIASES" <<'PYEOF'
+import sys, re
+path = sys.argv[1]
+with open(path) as f:
+    text = f.read()
+pattern = re.compile(
+    r"\n?# MetaMemory shortcuts \(installed by MetaBot\)\n"
+    r"export MEMORY_URL=.*\n"
+    r"export MEMORY_AUTH=.*\n\n"
+    r"mm\(\) \{.*?\n\}\n",
+    re.DOTALL,
+)
+new = pattern.sub("", text)
+with open(path, "w") as f:
+    f.write(new)
+PYEOF
+  success "Legacy mm() shortcut removed"
 fi
 
-# Install mb() shell shortcut for MetaBot API (Agent Bus, Scheduling, Bot Management)
-if ! grep -q 'mb()' "$BASH_ALIASES" 2>/dev/null; then
-  info "Installing mb() shell shortcut..."
-  cat >> "$BASH_ALIASES" << 'MBEOF'
-
-# MetaBot API shortcuts (installed by MetaBot)
-export METABOT_URL="http://localhost:${METABOT_API_PORT:-9100}"
-export METABOT_AUTH="Authorization: Bearer ${METABOT_API_SECRET:-changeme}"
-
-mb() {
-  local cmd="${1:-help}"
-  shift 2>/dev/null
-  case "$cmd" in
-    # --- Bot management ---
-    bots|b)
-      curl -s -H "$METABOT_AUTH" "$METABOT_URL/api/bots" | python3 -m json.tool 2>/dev/null || curl -s -H "$METABOT_AUTH" "$METABOT_URL/api/bots"
-      ;;
-    bot)
-      curl -s -H "$METABOT_AUTH" "$METABOT_URL/api/bots/$1" | python3 -m json.tool 2>/dev/null || curl -s -H "$METABOT_AUTH" "$METABOT_URL/api/bots/$1"
-      ;;
-    # --- Task delegation ---
-    task|t)
-      local bot="$1" chat="$2"; shift 2 2>/dev/null
-      local prompt="$*"
-      if [[ -z "$bot" || -z "$chat" || -z "$prompt" ]]; then
-        echo "Usage: mb task <botName> <chatId> <prompt>"
-        return 1
-      fi
-      curl -s -X POST "$METABOT_URL/api/tasks" \
-        -H "$METABOT_AUTH" -H "Content-Type: application/json" \
-        -d "{\"botName\":\"$bot\",\"chatId\":\"$chat\",\"prompt\":\"$prompt\",\"sendCards\":true}"
-      ;;
-    # --- Scheduling ---
-    schedule|sched|sc)
-      local subcmd="${1:-list}"; shift 2>/dev/null
-      case "$subcmd" in
-        list|ls)
-          curl -s -H "$METABOT_AUTH" "$METABOT_URL/api/schedule" | python3 -m json.tool 2>/dev/null || curl -s -H "$METABOT_AUTH" "$METABOT_URL/api/schedule"
-          ;;
-        add|a)
-          local bot="$1" chat="$2" delay="$3"; shift 3 2>/dev/null
-          local prompt="$*"
-          if [[ -z "$bot" || -z "$chat" || -z "$delay" || -z "$prompt" ]]; then
-            echo "Usage: mb schedule add <botName> <chatId> <delaySeconds> <prompt>"
-            return 1
-          fi
-          curl -s -X POST "$METABOT_URL/api/schedule" \
-            -H "$METABOT_AUTH" -H "Content-Type: application/json" \
-            -d "{\"botName\":\"$bot\",\"chatId\":\"$chat\",\"delaySeconds\":$delay,\"prompt\":\"$prompt\"}"
-          ;;
-        cancel|rm)
-          if [[ -z "$1" ]]; then echo "Usage: mb schedule cancel <id>"; return 1; fi
-          curl -s -X DELETE "$METABOT_URL/api/schedule/$1" -H "$METABOT_AUTH"
-          ;;
-        *)
-          echo "mb schedule - Task scheduling"
-          echo "  mb schedule list                                    - List pending tasks"
-          echo "  mb schedule add <bot> <chatId> <delaySec> <prompt>  - Schedule a task"
-          echo "  mb schedule cancel <id>                             - Cancel a task"
-          ;;
-      esac
-      ;;
-    # --- Health ---
-    health|h)
-      curl -s -H "$METABOT_AUTH" "$METABOT_URL/api/health" | python3 -m json.tool 2>/dev/null || curl -s -H "$METABOT_AUTH" "$METABOT_URL/api/health"
-      ;;
-    # --- Help ---
-    *)
-      echo "mb - MetaBot API CLI"
-      echo ""
-      echo "  Bots:"
-      echo "    mb bots                          - List all bots"
-      echo "    mb bot <name>                    - Get bot details"
-      echo ""
-      echo "  Tasks:"
-      echo "    mb task <bot> <chatId> <prompt>  - Delegate task to a bot"
-      echo ""
-      echo "  Scheduling:"
-      echo "    mb schedule list                 - List pending scheduled tasks"
-      echo "    mb schedule add <bot> <chatId> <delaySec> <prompt>"
-      echo "    mb schedule cancel <id>          - Cancel a scheduled task"
-      echo ""
-      echo "  System:"
-      echo "    mb health                        - Health check"
-      ;;
-  esac
-}
-MBEOF
-  # Patch the actual secrets into the file
-  if [[ -n "${API_PORT:-}" ]]; then
-    sed_i "s|\${METABOT_API_PORT:-9100}|${API_PORT}|g" "$BASH_ALIASES"
-  fi
-  if [[ -n "${API_SECRET:-}" ]]; then
-    sed_i "s|\${METABOT_API_SECRET:-changeme}|${API_SECRET}|g" "$BASH_ALIASES"
-  fi
-  success "mb() shortcut installed"
-else
-  info "mb() shortcut already exists, skipping"
-fi
-
-# Ensure ~/.bashrc sources ~/.bash_aliases (Ubuntu default, but not universal)
-if [[ -f "$HOME/.bashrc" ]] && ! grep -q 'bash_aliases' "$HOME/.bashrc"; then
-  echo -e '\n# Load bash aliases\nif [ -f ~/.bash_aliases ]; then\n    . ~/.bash_aliases\nfi' >> "$HOME/.bashrc"
-fi
-# Source it in the current shell so mm/mb work immediately after install
-source "$BASH_ALIASES" 2>/dev/null || true
-
-# Install mm/mb/metabot as standalone executables in ~/.local/bin (no source needed)
+# Install metabot as a standalone executable in ~/.local/bin (no source needed).
+# `metabot` is the single CLI binary (bridge process control + bridge daemon API
+# + delegation to the metabot-core feature CLI).
 LOCAL_BIN="$HOME/.local/bin"
 mkdir -p "$LOCAL_BIN"
-CLI_TOOLS="mm mb metabot"
+CLI_TOOLS="metabot"
 for cli in $CLI_TOOLS; do
-  if [[ -f "$METABOT_HOME/bin/$cli" ]]; then
-    cp "$METABOT_HOME/bin/$cli" "$LOCAL_BIN/$cli"
-    chmod +x "$LOCAL_BIN/$cli"
+  src="$METABOT_HOME/bin/$cli"
+  dst="$LOCAL_BIN/$cli"
+  if [[ -f "$src" ]]; then
+    # Skip if $dst is already a symlink to $src (user-curated layout) — copying
+    # a file onto its own symlink target errors out with `cp: 'a' and 'b' are
+    # the same file`.
+    if [[ "$src" -ef "$dst" ]]; then
+      continue
+    fi
+    cp "$src" "$dst"
+    chmod +x "$dst"
   fi
 done
-# Clean up legacy fd CLI if present
-[[ -f "$LOCAL_BIN/fd" ]] && rm -f "$LOCAL_BIN/fd"
+# Clean up legacy CLIs: mb (deprecation shim, now removed), fd (old shortcut),
+# mbcore (temp Phase 4 shim), mm/mh (metabot-core feature CLIs subsumed by
+# `metabot` dispatcher).
+for legacy_cli in mb fd mbcore mm mh; do
+  if [[ -f "$LOCAL_BIN/$legacy_cli" || -L "$LOCAL_BIN/$legacy_cli" ]]; then
+    # Only remove regular files / symlinks living inside ~/.local/bin — never
+    # touch system-installed binaries elsewhere on PATH.
+    rm -f "$LOCAL_BIN/$legacy_cli"
+  fi
+done
 # Ensure ~/.local/bin is in PATH (most distros include it, but not all)
 if ! echo "$PATH" | grep -q "$LOCAL_BIN"; then
   echo "export PATH=\"$LOCAL_BIN:\$PATH\"" >> "$HOME/.bashrc"
   info "Added ~/.local/bin to PATH in ~/.bashrc"
 fi
-success "mm/mb/metabot CLI tools installed to $LOCAL_BIN"
+success "metabot CLI installed to $LOCAL_BIN"
+
+# Persist METABOT_HOME for non-default install paths so the CLI tool
+# (metabot) can find the install in new shell sessions. The CLI falls
+# back to $HOME/metabot, so we only need to export when it differs.
+if [[ "$METABOT_HOME" != "$DEFAULT_METABOT_HOME" ]]; then
+  for rc_file in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
+    [[ -f "$rc_file" ]] || continue
+    # Drop any prior export to keep this idempotent across re-runs.
+    if grep -q '^export METABOT_HOME=' "$rc_file" 2>/dev/null; then
+      sed_i '/^export METABOT_HOME=/d' "$rc_file"
+    fi
+  done
+  echo "export METABOT_HOME=\"$METABOT_HOME\"" >> "$HOME/.bashrc"
+  if [[ -f "$HOME/.zshrc" ]]; then
+    echo "export METABOT_HOME=\"$METABOT_HOME\"" >> "$HOME/.zshrc"
+  fi
+  info "Persisted METABOT_HOME=$METABOT_HOME to shell rc files"
+fi
 
 # ============================================================================
 # Phase 8: Build + Start MetaBot with PM2
@@ -1009,29 +1261,50 @@ if [[ "${SKIP_CONFIG}" == "false" ]]; then
   echo -e "  ${BOLD}Working Dir:${NC}    ${WORK_DIR}"
   echo -e "  ${BOLD}API:${NC}            http://localhost:${API_PORT}"
   echo -e "  ${BOLD}API Secret:${NC}     ${API_SECRET:0:8}...${API_SECRET: -4}"
+  echo -e "  ${BOLD}Engine:${NC}         ${BOT_ENGINE:-claude}"
   echo -e "  ${BOLD}Auth Method:${NC}    ${CLAUDE_AUTH_METHOD}"
   if [[ "${CLAUDE_AUTH_METHOD}" == "third_party" ]]; then
     echo -e "  ${BOLD}Provider:${NC}       ${PROVIDER_NAME}"
   fi
 fi
-if [[ "$METAMEMORY_INSTALLED" == "true" ]]; then
-  echo -e "  ${BOLD}MetaMemory:${NC}     http://localhost:8100"
-fi
+CORE_URL_DISPLAY="${METABOT_CORE_URL:-http://localhost:9200}"
+echo -e "  ${BOLD}metabot-core:${NC}    ${CORE_URL_DISPLAY}"
 echo ""
 echo -e "  ${BOLD}Commands:${NC}"
 echo "    pm2 logs metabot          # View MetaBot logs"
 echo "    pm2 restart metabot       # Restart MetaBot"
 echo "    pm2 stop metabot          # Stop MetaBot"
-if [[ "$METAMEMORY_INSTALLED" == "true" ]]; then
-  echo "    mm search <query>         # Search MetaMemory"
-  echo "    mm folders                # Browse knowledge tree"
-fi
+echo "    metabot memory list       # Browse central memory (delegated to metabot-core)"
+echo "    metabot memory visibility # Per-bot default: /shared (public) vs /users (private); flip with 'visibility private|public'"
+echo "    metabot skills list       # List shared skills"
+echo "    metabot agents list       # List visible agents"
+echo "    metabot t5t board         # T5T project board"
 echo ""
+if [[ -z "${METABOT_CORE_TOKEN:-}" ]]; then
+  echo -e "  ${BOLD}metabot-core onboarding:${NC}"
+  echo "    1. Grab your token from ~/.metabot-core/token (generated on first launch)"
+  echo "       or open ${CORE_URL_DISPLAY}/cli and click 'Generate'"
+  echo "    2. Paste it into ${METABOT_HOME}/.env as METABOT_CORE_TOKEN=mt_..."
+  echo "       (or save to ~/.metabot-core/token, chmod 600)"
+  echo ""
+fi
 if [[ "${SKIP_CONFIG}" == "false" ]]; then
   echo -e "  ${BOLD}Next Steps:${NC}"
   STEP_NUM=1
   if [[ "${CLAUDE_AUTH_METHOD}" == "subscription" ]]; then
     echo "    ${STEP_NUM}. Run 'claude login' in a separate terminal"
+    STEP_NUM=$((STEP_NUM + 1))
+  fi
+  if [[ "${CLAUDE_AUTH_METHOD}" == "kimi" ]]; then
+    echo "    ${STEP_NUM}. Run 'kimi login' in a separate terminal (https://kimi.com to sign up)"
+    STEP_NUM=$((STEP_NUM + 1))
+  fi
+  if [[ "${CLAUDE_AUTH_METHOD}" == "codex" ]]; then
+    if ! command -v codex &>/dev/null; then
+      echo "    ${STEP_NUM}. Install Codex CLI: sudo npm install -g @openai/codex"
+      STEP_NUM=$((STEP_NUM + 1))
+    fi
+    echo "    ${STEP_NUM}. Run 'codex login' in a separate terminal (or set OPENAI_API_KEY / configure ~/.codex/config.toml)"
     STEP_NUM=$((STEP_NUM + 1))
   fi
   if [[ "$SETUP_FEISHU" == "true" ]]; then

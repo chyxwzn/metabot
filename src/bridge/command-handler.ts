@@ -1,18 +1,16 @@
-import type { BotConfigBase } from '../config.js';
+import type { BotConfigBase, CodexReasoningEffort } from '../config.js';
 import type { Logger } from '../utils/logger.js';
 import type { IncomingMessage } from '../types.js';
 import type { IMessageSender } from './message-sender.interface.js';
-import { SessionManager, type UserSession } from '../claude/session-manager.js';
+import { resolveEngineName, SessionManager } from '../engines/index.js';
+import type { EngineName } from '../engines/index.js';
+import type { SessionSummary } from '../engines/claude/session-lister.js';
 import { MemoryClient } from '../memory/memory-client.js';
 import { AuditLogger } from '../utils/audit-logger.js';
 import type { DocSync } from '../sync/doc-sync.js';
 
-/** Callback to enter pending session selection mode in MessageBridge. */
-export type SessionSwitchCallback = (chatId: string, sessions: UserSession[]) => void;
-
 export class CommandHandler {
   private docSync: DocSync | null = null;
-  private onSessionSwitch: SessionSwitchCallback | null = null;
 
   constructor(
     private config: BotConfigBase,
@@ -23,16 +21,37 @@ export class CommandHandler {
     private audit: AuditLogger,
     private getRunningTask: (chatId: string) => { startTime: number } | undefined,
     private stopTask: (chatId: string) => void,
+    /**
+     * Drain the chat's queued-message buffer, returning the number of
+     * messages discarded. Called from /stop so the user's "stop" intent
+     * isn't immediately undone by the next queued message — without this
+     * the bridge's processQueue would start the next one as soon as the
+     * aborted task's finally block runs.
+     */
+    private clearQueue: (chatId: string) => number,
+    /**
+     * Release the persistent Claude process associated with this chat
+     * (no-op if the persistent-executor feature flag is off or no
+     * executor exists). Called on /reset so teammates and /goal state
+     * tied to the old session are torn down with the conversation.
+     */
+    private releaseExecutor: (chatId: string, reason: string) => Promise<void>,
+    /**
+     * List the recent Claude sessions for this chat's working directory
+     * (newest first). Backs the direct `/resume <id>` form. Read-only.
+     */
+    private listSessions: (chatId: string) => SessionSummary[],
+    /**
+     * Swap the chat into a previous Claude session: re-point the sessionId,
+     * reset usage counters, release the persistent executor so the next turn
+     * resumes via `claude --resume`. Backs both `/resume` forms.
+     */
+    private applyResume: (chatId: string, sessionId: string) => Promise<void>,
   ) {}
 
   /** Set the doc sync service (optional, only available for Feishu bots). */
   setDocSync(docSync: DocSync): void {
     this.docSync = docSync;
-  }
-
-  /** Set the session switch callback for /switch selection mode. */
-  setSessionSwitchCallback(onSwitch: SessionSwitchCallback): void {
-    this.onSessionSwitch = onSwitch;
   }
 
   /** Returns true if the message was handled as a command, false otherwise. */
@@ -48,18 +67,27 @@ export class CommandHandler {
     switch (cmd.toLowerCase()) {
       case '/help':
         await this.sender.sendTextNotice(chatId, '📖 Help', [
-          '**Available Commands:**',
+          '**Bot Commands:**',
           '`/reset` - Clear session, start fresh',
           '`/stop` - Abort current running task',
           '`/status` - Show current session info',
-          '`/model` - Show current model; `/model list` - Available models; `/model <name>` - Switch',
-          '`/sessions` - List recent sessions',
-          '`/switch [N]` - Switch to a previous session',
+          '`/model` - Show current engine/model; `/model list` - Available options',
+          '`/model claude`, `/model kimi`, or `/model codex` - Switch engine (resets session)',
+          '`/model <name>` - Set model for current engine',
+          '`/effort low|medium|high|xhigh` - Set Codex reasoning effort for this chat',
+          '`/resume` - List & switch to a previous Claude session (Claude only)',
+          '`/resume <id>` - Resume a session directly by id prefix',
           '`/memory` - Memory document commands',
           '`/help` - Show this help message',
           '',
+          '**Agent Commands:**',
+          '`/goal <description>` - Set a goal the agent keeps pursuing across turns (Claude native, Codex bridge-managed)',
+          '`/goal status|clear` - Show or clear the current goal',
+          '`/background <prompt>` - Run a task in the background while you continue chatting (Claude native, Codex bridge-managed)',
+          '`/background list|logs <id>|stop <id>` - Manage Codex background tasks',
+          '',
           '**Usage:**',
-          'Send any text message to start a conversation with Claude Code.',
+          'Send any text message to start a conversation with the configured agent engine.',
           'Each chat has an independent session with a fixed working directory.',
           '',
           '**Memory Commands:**',
@@ -74,16 +102,64 @@ export class CommandHandler {
         return true;
 
       case '/reset':
+        {
+          const task = this.getRunningTask(chatId);
+          const cleared = this.clearQueue(chatId);
+          if (task) {
+            this.audit.log({
+              event: 'task_stopped',
+              botName: this.config.name,
+              chatId,
+              userId,
+              durationMs: Date.now() - task.startTime,
+              meta: { reason: 'reset', clearedQueue: cleared },
+            });
+            this.stopTask(chatId);
+          } else if (cleared > 0) {
+            this.audit.log({
+              event: 'queue_cleared',
+              botName: this.config.name,
+              chatId,
+              userId,
+              meta: { reason: 'reset', clearedQueue: cleared },
+            });
+          }
+        }
         this.sessionManager.resetSession(chatId);
-        await this.sender.sendTextNotice(chatId, '✅ Session Reset', 'Conversation cleared. Use `/sessions` to switch back to a previous session.', 'green');
+        // Tear down the persistent Claude process for this chat (Stage 3b).
+        // Otherwise the old long-lived executor would keep running with its
+        // stale (now-cleared) sessionId mapping. No-op when persistent mode
+        // is off. Best-effort — log but don't fail the /reset on shutdown errors.
+        try {
+          await this.releaseExecutor(chatId, 'reset-command');
+        } catch (err) {
+          this.logger.warn({ err, chatId }, 'Failed to release persistent executor on /reset');
+        }
+        await this.sender.sendTextNotice(chatId, '✅ Session Reset', 'Conversation cleared. Working directory preserved.', 'green');
         return true;
 
       case '/stop': {
         const task = this.getRunningTask(chatId);
+        // Always drain the queue first — otherwise the running task's
+        // finally block immediately picks the next queued message via
+        // processQueue and the user's "stop" intent silently fails.
+        const cleared = this.clearQueue(chatId);
         if (task) {
-          this.audit.log({ event: 'task_stopped', botName: this.config.name, chatId, userId, durationMs: Date.now() - task.startTime });
+          this.audit.log({ event: 'task_stopped', botName: this.config.name, chatId, userId, durationMs: Date.now() - task.startTime, meta: { clearedQueue: cleared } });
           this.stopTask(chatId);
-          await this.sender.sendTextNotice(chatId, '🛑 Stopped', 'Current task has been aborted.', 'orange');
+          const body = cleared > 0
+            ? `Current task aborted. Discarded **${cleared}** queued message${cleared === 1 ? '' : 's'}.`
+            : 'Current task has been aborted.';
+          await this.sender.sendTextNotice(chatId, '🛑 Stopped', body, 'orange');
+        } else if (cleared > 0) {
+          // No running task but queued messages existed — clear them too.
+          this.audit.log({ event: 'queue_cleared', botName: this.config.name, chatId, userId, meta: { clearedQueue: cleared } });
+          await this.sender.sendTextNotice(
+            chatId,
+            '🛑 Queue Cleared',
+            `No task was running. Discarded **${cleared}** queued message${cleared === 1 ? '' : 's'}.`,
+            'orange',
+          );
         } else {
           await this.sender.sendTextNotice(chatId, 'ℹ️ No Running Task', 'There is no task to stop.', 'blue');
         }
@@ -93,12 +169,17 @@ export class CommandHandler {
       case '/status': {
         const session = this.sessionManager.getSession(chatId);
         const isRunning = !!this.getRunningTask(chatId);
-        const activeModel = session.model || this.config.claude.model || '_default_';
+        const botEngine = resolveEngineName(this.config);
+        const activeEngine = session.engine ?? botEngine;
+        const defaultModel = this.defaultModelForEngine(activeEngine) || '_default_';
+        const activeModel = session.model || defaultModel;
         await this.sender.sendTextNotice(chatId, '📊 Status', [
           `**User:** \`${userId}\``,
+          `**Engine:** \`${activeEngine}\`${session.engine ? ' (session override)' : ''}`,
           `**Working Directory:** \`${session.workingDirectory}\``,
           `**Session:** ${session.sessionId ? `\`${session.sessionId.slice(0, 8)}...\`` : '_None_'}`,
           `**Model:** \`${activeModel}\`${session.model ? ' (session override)' : ''}`,
+          `**Effort:** \`${session.reasoningEffort || this.config.codex?.reasoningEffort || 'codex default'}\`${session.reasoningEffort ? ' (session override)' : ''}`,
           `**Running:** ${isRunning ? 'Yes ⏳' : 'No'}`,
         ].join('\n'));
         return true;
@@ -116,65 +197,21 @@ export class CommandHandler {
         return true;
       }
 
-      case '/sessions': {
-        const sessions = this.sessionManager.listSessions(chatId);
-        if (sessions.length === 0) {
-          await this.sender.sendTextNotice(chatId, '📋 Sessions', 'No sessions found.');
-          return true;
-        }
-        const activeIndex = this.sessionManager.getActiveIndex(chatId);
-        const lines = sessions.map((s, i) => {
-          const title = (s.title || '(untitled)').slice(0, 40);
-          const current = i === activeIndex ? ' 👈' : '';
-          return `**${i + 1}.** ${title}${current}`;
-        });
-        lines.push('', 'Use `/switch N` to switch to a session.');
-        await this.sender.sendTextNotice(chatId, '📋 Sessions', lines.join('\n'));
-        return true;
-      }
-
-      case '/switch': {
-        const sessions = this.sessionManager.listSessions(chatId);
-        if (sessions.length <= 1) {
-          await this.sender.sendTextNotice(chatId, '📋 Switch', 'Only one session exists. Use `/reset` to create a new one.', 'orange');
-          return true;
-        }
-        const switchArg = text.slice('/switch'.length).trim();
-
-        if (switchArg) {
-          // Direct switch by number
-          const num = parseInt(switchArg, 10);
-          if (isNaN(num) || num < 1 || num > sessions.length) {
-            await this.sender.sendTextNotice(chatId, '❌ Invalid', `Please enter a number between 1 and ${sessions.length}.`, 'red');
-            return true;
-          }
-          const target = sessions[num - 1];
-          if (!target.sessionId) {
-            await this.sender.sendTextNotice(chatId, '❌ Cannot Switch', 'This session has no conversation to resume.', 'red');
-            return true;
-          }
-          this.sessionManager.switchSession(chatId, num - 1);
-          await this.sender.sendTextNotice(chatId, '✅ Switched', `Switched to: **${(target.title || '(untitled)').slice(0, 40)}**`, 'green');
-          return true;
-        }
-
-        // No argument: show list and enter selection mode
-        const activeIndex = this.sessionManager.getActiveIndex(chatId);
-        const lines = sessions.map((s, i) => {
-          const title = (s.title || '(untitled)').slice(0, 40);
-          const current = i === activeIndex ? ' 👈' : '';
-          return `**${i + 1}.** ${title}${current}`;
-        });
-        lines.push('', '_Reply with a number to switch, or send any other message to cancel._');
-        await this.sender.sendTextNotice(chatId, '📋 Switch Session', lines.join('\n'));
-        // Enter selection mode
-        this.onSessionSwitch?.(chatId, sessions);
-        return true;
-      }
-
       case '/model': {
         const args = text.slice('/model'.length).trim();
         await this.handleModelCommand(chatId, args);
+        return true;
+      }
+
+      case '/effort': {
+        const args = text.slice('/effort'.length).trim();
+        await this.handleEffortCommand(chatId, args);
+        return true;
+      }
+
+      case '/resume': {
+        const arg = text.slice('/resume'.length).trim();
+        await this.handleResumeCommand(msg, arg);
         return true;
       }
 
@@ -297,29 +334,65 @@ export class CommandHandler {
 
   private async handleModelCommand(chatId: string, args: string): Promise<void> {
     const session = this.sessionManager.getSession(chatId);
-    const botDefault = this.config.claude.model;
+    const botEngine = resolveEngineName(this.config);
+    const activeEngine = session.engine ?? botEngine;
+    const botDefault = this.defaultModelForEngine(activeEngine);
 
     // No args — show current model
     if (!args) {
       const active = session.model || botDefault || '_default_';
+      const exampleModels = this.exampleModelsForEngine(activeEngine);
       const lines = [
+        `**Engine:** \`${activeEngine}\`${session.engine ? ' (session override)' : ''}`,
         `**Active:** \`${active}\`${session.model ? ' (session override)' : ''}`,
         `**Bot default:** \`${botDefault || '_unset_'}\``,
         '',
         'Usage:',
-        '- `/model list` — Show available models',
-        '- `/model <name>` — Set session model (e.g. `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5`)',
-        '- `/model reset` — Clear override, use bot default',
+        '- `/model list` — Show available engines + models',
+        '- `/model claude`, `/model kimi`, or `/model codex` — Switch engine (resets session)',
+        `- \`/model <name>\` — Set session model (e.g. ${exampleModels})`,
+        '- `/model reset` — Clear overrides, use bot defaults',
       ];
       await this.sender.sendTextNotice(chatId, '🤖 Model', lines.join('\n'));
       return;
     }
 
+    const normalized = args.toLowerCase();
+
+    // Engine switch — /model claude, /model kimi, or /model codex
+    if (isEngineName(normalized)) {
+      if (activeEngine === normalized) {
+        await this.sender.sendTextNotice(
+          chatId,
+          'ℹ️ Already using ' + normalized,
+          `This chat is already on the \`${normalized}\` engine.`,
+          'blue',
+        );
+        return;
+      }
+      this.sessionManager.setSessionEngine(chatId, normalized);
+      await this.sender.sendTextNotice(
+        chatId,
+        `✅ Engine switched to ${normalized}`,
+        [
+          `Next message will run on the **${normalized}** engine.`,
+          '',
+          '_Session ID and model override cleared — a fresh conversation starts on the next turn._',
+          this.authTipForEngine(normalized),
+        ].join('\n'),
+        'green',
+      );
+      return;
+    }
+
     // List available models
-    if (args.toLowerCase() === 'list' || args.toLowerCase() === 'ls') {
+    if (normalized === 'list' || normalized === 'ls') {
       const active = session.model || botDefault;
-      const models = [
-        { id: 'claude-opus-4-7', label: 'Opus 4.7', note: 'Most capable · 200k context' },
+      const claudeModels = [
+        { id: 'claude-fable-5', label: 'Fable 5', note: 'Latest Claude Code model · 1M context · 128k max output · adaptive thinking' },
+        { id: 'claude-opus-4-8', label: 'Opus 4.8', note: 'High-capability legacy default · 200k context · 128k max output' },
+        { id: 'claude-opus-4-8[1m]', label: 'Opus 4.8 (1M)', note: '1M context window' },
+        { id: 'claude-opus-4-7', label: 'Opus 4.7', note: '200k context' },
         { id: 'claude-opus-4-7[1m]', label: 'Opus 4.7 (1M)', note: '1M context window' },
         { id: 'claude-opus-4-6', label: 'Opus 4.6', note: '200k context' },
         { id: 'claude-opus-4-6[1m]', label: 'Opus 4.6 (1M)', note: '1M context window' },
@@ -327,26 +400,56 @@ export class CommandHandler {
         { id: 'claude-sonnet-4-6[1m]', label: 'Sonnet 4.6 (1M)', note: '1M context window' },
         { id: 'claude-haiku-4-5', label: 'Haiku 4.5', note: 'Fastest · 200k context' },
       ];
-      const lines = ['**Available Claude models:**', ''];
+      const kimiModels = [
+        { id: 'kimi-for-coding', label: 'Kimi for Coding', note: 'Subscription default · 256k context · thinking' },
+        { id: 'kimi-k2', label: 'Kimi K2', note: 'Legacy coding model' },
+      ];
+      const codexModels = [
+        { id: 'gpt-5.5', label: 'GPT 5.5', note: 'Recommended Codex model for ChatGPT subscription users' },
+        { id: 'gpt-5.5-codex', label: 'GPT 5.5 Codex', note: 'Codex coding model, when available in your Codex account' },
+        { id: 'gpt-5.2-codex', label: 'GPT-5.2 Codex', note: 'Legacy Codex coding model' },
+      ];
+      const models = activeEngine === 'kimi' ? kimiModels : activeEngine === 'codex' ? codexModels : claudeModels;
+      const header = activeEngine === 'kimi'
+        ? '**Available Kimi models:**'
+        : activeEngine === 'codex'
+          ? '**Common Codex models:**'
+          : '**Available Claude models:**';
+      const lines = [
+        `**Current engine:** \`${activeEngine}\`${session.engine ? ' (session override)' : ''}`,
+        '',
+        '**Engines:** `/model claude`, `/model kimi`, or `/model codex` to switch.',
+        '',
+        header,
+        '',
+      ];
       for (const m of models) {
         const marker = m.id === active ? ' ✅' : '';
         lines.push(`- \`${m.id}\` — ${m.label} · ${m.note}${marker}`);
       }
       lines.push('');
-      lines.push('_Tip: append `[1m]` to a model name to enable the 1M context window. Only Opus 4.7/4.6 and Sonnet 4.6 support it._');
-      lines.push('Use `/model <name>` to switch.');
+      if (activeEngine === 'claude') {
+        lines.push('_Tip: Fable 5 uses its native 1M context. For Opus/Sonnet, append `[1m]` to enable the 1M context window._');
+      } else if (activeEngine === 'codex') {
+        lines.push('_Tip: leave unset to use the Codex CLI default from `~/.codex/config.toml`._');
+      } else {
+        lines.push('_Tip: leave unset to use the kimi-cli default (recommended for subscription users — the server picks the best available)._');
+      }
+      lines.push('Use `/model <name>` to set the model for the current engine.');
       await this.sender.sendTextNotice(chatId, '🤖 Available Models', lines.join('\n'));
       return;
     }
 
-    // Reset — clear the override
-    if (args.toLowerCase() === 'reset' || args.toLowerCase() === 'clear' || args.toLowerCase() === 'default') {
+    // Reset — clear overrides (both engine AND model)
+    if (normalized === 'reset' || normalized === 'clear' || normalized === 'default') {
       this.sessionManager.setSessionModel(chatId, undefined);
+      this.sessionManager.setSessionEngine(chatId, undefined);
+      this.sessionManager.setReasoningEffort(chatId, undefined);
       const fallback = botDefault || '_default_';
       await this.sender.sendTextNotice(
         chatId,
-        '✅ Model Reset',
-        `Session override cleared. Using bot default: \`${fallback}\``,
+        '✅ Overrides Cleared',
+        `Session engine and model overrides cleared. Using bot defaults: engine \`${botEngine}\`, model \`${fallback}\`.`,
         'green',
       );
       return;
@@ -354,12 +457,209 @@ export class CommandHandler {
 
     // Set the model (use only the first token, ignore trailing junk)
     const newModel = args.split(/\s+/)[0];
-    this.sessionManager.setSessionModel(chatId, newModel);
+    this.sessionManager.setSessionModel(chatId, newModel, activeEngine);
     await this.sender.sendTextNotice(
       chatId,
       '✅ Model Set',
-      `Session model set to \`${newModel}\`. It will take effect on the next message.`,
+      `Session model set to \`${newModel}\` on engine \`${activeEngine}\`. It will take effect on the next message.`,
       'green',
     );
   }
+
+  private async handleEffortCommand(chatId: string, args: string): Promise<void> {
+    const session = this.sessionManager.getSession(chatId);
+    const activeEngine = session.engine ?? resolveEngineName(this.config);
+    const normalized = normalizeCodexEffort(args);
+
+    if (!args) {
+      const current = session.reasoningEffort || this.config.codex?.reasoningEffort || '_codex default_';
+      await this.sender.sendTextNotice(
+        chatId,
+        '🧠 Effort',
+        [
+          `**Engine:** \`${activeEngine}\``,
+          `**Current:** \`${current}\`${session.reasoningEffort ? ' (session override)' : ''}`,
+          '',
+          'Usage:',
+          '- `/effort low` — fastest',
+          '- `/effort medium` — balanced',
+          '- `/effort high` — deeper reasoning',
+          '- `/effort xhigh` — maximum Codex-supported effort',
+          '- `/effort reset` — clear session override',
+        ].join('\n'),
+      );
+      return;
+    }
+
+    if (activeEngine !== 'codex') {
+      await this.sender.sendTextNotice(
+        chatId,
+        'ℹ️ Codex effort only',
+        `This chat is on \`${activeEngine}\`. Switch with \`/model codex\`, then use \`/effort high\` or \`/effort xhigh\`.`,
+        'blue',
+      );
+      return;
+    }
+
+    if (normalized === 'reset') {
+      this.sessionManager.setReasoningEffort(chatId, undefined);
+      await this.sender.sendTextNotice(
+        chatId,
+        '✅ Effort Reset',
+        `Codex reasoning effort override cleared. Using \`${this.config.codex?.reasoningEffort || 'codex default'}\`.`,
+        'green',
+      );
+      return;
+    }
+
+    if (!normalized) {
+      await this.sender.sendTextNotice(
+        chatId,
+        '❌ Invalid Effort',
+        'Use one of: `low`, `medium`, `high`, `xhigh`. `max` is accepted as an alias for `xhigh`.',
+        'red',
+      );
+      return;
+    }
+
+    this.sessionManager.setReasoningEffort(chatId, normalized);
+    await this.sender.sendTextNotice(
+      chatId,
+      '✅ Effort Set',
+      `Codex reasoning effort set to \`${normalized}\`. It will take effect on the next message.`,
+      'green',
+    );
+  }
+
+  /**
+   * `/resume <id-or-prefix>` — switch the chat directly into a previous Claude
+   * session by (a prefix of) its session id. Bare `/resume` is intercepted by
+   * the bridge picker before reaching here; we keep a usage notice as a
+   * defensive fallback.
+   *
+   * Gated to the Claude engine (transcripts are claude-specific) and refused
+   * while a turn is running (the swap would race the in-flight executor).
+   */
+  private async handleResumeCommand(msg: IncomingMessage, arg: string): Promise<void> {
+    const { chatId } = msg;
+    const session = this.sessionManager.getSession(chatId);
+    const activeEngine = session.engine ?? resolveEngineName(this.config);
+    if (activeEngine !== 'claude') {
+      await this.sender.sendTextNotice(
+        chatId,
+        '❌ /resume is Claude-only',
+        `This chat is on the \`${activeEngine}\` engine. Session resume is only available for the Claude engine.`,
+        'red',
+      );
+      return;
+    }
+
+    if (this.getRunningTask(chatId)) {
+      await this.sender.sendTextNotice(
+        chatId,
+        '⏳ Task In Progress',
+        'A task is running. Use `/stop` first, then `/resume`.',
+        'orange',
+      );
+      return;
+    }
+
+    if (!arg) {
+      await this.sender.sendTextNotice(
+        chatId,
+        '📝 Resume',
+        'Usage: `/resume <session-id-prefix>`, or send a bare `/resume` to pick from a list.',
+        'blue',
+      );
+      return;
+    }
+
+    const sessions = this.listSessions(chatId);
+    if (sessions.length === 0) {
+      await this.sender.sendTextNotice(
+        chatId,
+        'ℹ️ No Previous Sessions',
+        'No earlier Claude sessions were found for this chat\'s working directory.',
+        'blue',
+      );
+      return;
+    }
+
+    const exact = sessions.find((s) => s.sessionId === arg);
+    const matches = exact ? [exact] : sessions.filter((s) => s.sessionId.startsWith(arg));
+
+    if (matches.length === 0) {
+      await this.sender.sendTextNotice(
+        chatId,
+        '❌ No Match',
+        `No session id starts with \`${arg}\`. Send a bare \`/resume\` to see the list.`,
+        'red',
+      );
+      return;
+    }
+    if (matches.length > 1) {
+      const ids = matches.slice(0, 8).map((s) => `\`${s.sessionId.slice(0, 8)}\``).join(', ');
+      await this.sender.sendTextNotice(
+        chatId,
+        '⚠️ Ambiguous',
+        `\`${arg}\` matches ${matches.length} sessions: ${ids}. Add more characters.`,
+        'orange',
+      );
+      return;
+    }
+
+    const target = matches[0];
+    await this.applyResume(chatId, target.sessionId);
+    await this.sender.sendTextNotice(
+      chatId,
+      '✅ Session Resumed',
+      `Resumed \`${target.sessionId.slice(0, 8)}\`. Your next message continues that conversation.`,
+      'green',
+    );
+  }
+
+  private defaultModelForEngine(engine: EngineName): string | undefined {
+    switch (engine) {
+      case 'claude':
+        return this.config.claude.model;
+      case 'kimi':
+        return this.config.kimi?.model;
+      case 'codex':
+        return this.config.codex?.model || this.config.codex?.displayModel;
+    }
+  }
+
+  private exampleModelsForEngine(engine: EngineName): string {
+    switch (engine) {
+      case 'claude':
+        return '`claude-fable-5`, `claude-opus-4-8`, `claude-sonnet-4-6`, `claude-haiku-4-5`';
+      case 'kimi':
+        return '`kimi-for-coding`, `kimi-k2`';
+      case 'codex':
+        return '`gpt-5.5`, `gpt-5.5-codex`, `gpt-5.2-codex`';
+    }
+  }
+
+  private authTipForEngine(engine: EngineName): string {
+    switch (engine) {
+      case 'claude':
+        return '_Make sure Claude Code is authenticated (`claude login`)._';
+      case 'kimi':
+        return '_Make sure `kimi login` has been completed on this host._';
+      case 'codex':
+        return '_Make sure Codex CLI is authenticated (`codex login`) or configured with an API key._';
+    }
+  }
+}
+
+function isEngineName(value: string): value is EngineName {
+  return value === 'claude' || value === 'kimi' || value === 'codex';
+}
+
+function normalizeCodexEffort(value: string): CodexReasoningEffort | 'reset' | undefined {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'reset' || normalized === 'clear' || normalized === 'default') return 'reset';
+  if (normalized === 'max') return 'xhigh';
+  if (normalized === 'low' || normalized === 'medium' || normalized === 'high' || normalized === 'xhigh') return normalized;
+  return undefined;
 }
