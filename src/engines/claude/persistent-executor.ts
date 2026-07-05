@@ -60,8 +60,29 @@ function resolveClaudePath(): string {
     // PATH lookup failed — try common locations
   }
   if (isWindows) {
-    const localBin = path.join(os.homedir(), '.local', 'bin', 'claude.exe');
-    if (fs.existsSync(localBin)) return localBin;
+    // When running as SYSTEM (NSSM), os.homedir() is the SYSTEM profile.
+    // Search known user profile paths for claude.exe.
+    const candidates = [
+      path.join(os.homedir(), '.local', 'bin', 'claude.exe'),
+      path.join(os.homedir(), 'AppData', 'Roaming', 'npm', 'claude.cmd'),
+    ];
+    // Also search C:\Users\*\ for the real user's claude install (needed
+    // when running as SYSTEM via NSSM — os.homedir() is the SYSTEM profile).
+    try {
+      const usersDir = 'C:\\Users';
+      if (fs.existsSync(usersDir)) {
+        for (const user of fs.readdirSync(usersDir)) {
+          if (user.startsWith('.') || user === 'Public' || user === 'Default' || user === 'All Users') continue;
+          candidates.push(
+            path.join(usersDir, user, '.local', 'bin', 'claude.exe'),
+            path.join(usersDir, user, 'AppData', 'Roaming', 'npm', 'claude.cmd'),
+          );
+        }
+      }
+    } catch { /* ignore */ }
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) return candidate;
+    }
     return 'claude.cmd';
   }
   return '/usr/local/bin/claude';
