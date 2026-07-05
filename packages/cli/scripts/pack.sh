@@ -30,7 +30,8 @@ SKILL_SRC_DIR="$REPO_ROOT/packages/skills/metabot"
 STAGE_DIR="$CLI_PKG_DIR/dist-pack"
 TARBALL_NAME="latest.tgz"
 
-VERSION="$(node -e "process.stdout.write(require('$REPO_ROOT/package.json').version)")"
+REPO_ROOT_WIN="$(cygpath -w "$REPO_ROOT" 2>/dev/null || echo "$REPO_ROOT")"
+VERSION="$(node -e "const p=process.argv[1];process.stdout.write(JSON.parse(require('fs').readFileSync(p,'utf8')).version)" "$REPO_ROOT_WIN\\package.json")"
 
 echo "==> Cleaning stage dir: $STAGE_DIR"
 rm -rf "$STAGE_DIR"

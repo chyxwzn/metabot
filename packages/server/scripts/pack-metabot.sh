@@ -45,7 +45,8 @@ PACKAGE_DEFAULT_ENV_FILE="${METABOT_PACKAGE_DEFAULT_ENV_FILE:-${METABOT_INTERNAL
 TARBALL_NAME="latest.tgz"
 BOOTSTRAP_NAME="install.sh"
 
-VERSION="$(node -e "process.stdout.write(require('$REPO_ROOT/package.json').version)")"
+REPO_ROOT_WIN="$(cygpath -w "$REPO_ROOT" 2>/dev/null || echo "$REPO_ROOT")"
+VERSION="$(node -e "const p=process.argv[1];process.stdout.write(JSON.parse(require('fs').readFileSync(p,'utf8')).version)" "$REPO_ROOT_WIN\\package.json")"
 
 # Patterns excluded from every recursive include. Mirrors what rsync staging
 # used to skip; tar applies these globally regardless of which include path
