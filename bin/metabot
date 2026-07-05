@@ -353,9 +353,7 @@ cmd_update() {
   fi
 
   info "Restarting MetaBot..."
-  _write_restart_breadcrumb
-  pm2 restart metabot 2>/dev/null || pm2 start ecosystem.config.cjs
-  pm2 save --force 2>/dev/null || true
+  _svc_restart || _svc_start
 
   success "MetaBot updated and restarted!"
 
@@ -403,11 +401,76 @@ _write_restart_breadcrumb() {
   printf '{"restartedAt": %s}\n' "$(date +%s)" > "$dir/last-restart.json" 2>/dev/null || true
 }
 
-cmd_start()   { pm2 start "$METABOT_HOME/ecosystem.config.cjs"; pm2 save --force 2>/dev/null || true; }
-cmd_stop()    { pm2 stop metabot; }
-cmd_restart() { _write_restart_breadcrumb; pm2 restart metabot; }
-cmd_logs()    { pm2 logs metabot "${@}"; }
-cmd_status()  { pm2 describe metabot; }
+# Detect Windows + NSSM (instead of PM2)
+_is_windows_nssm() {
+  [[ "$(uname -s 2>/dev/null || uname 2>/dev/null)" == *"_NT"* || "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]] && command -v nssm &>/dev/null
+}
+
+_svc_start() {
+  if _is_windows_nssm; then
+    nssm start MetaBot 2>/dev/null || { warn "NSSM start failed. Run 'nssm status MetaBot' to check."; return 1; }
+  else
+    pm2 start "$METABOT_HOME/ecosystem.config.cjs"; pm2 save --force 2>/dev/null || true
+  fi
+}
+
+_svc_stop() {
+  if _is_windows_nssm; then
+    nssm stop MetaBot 2>/dev/null || { warn "NSSM stop failed."; return 1; }
+  else
+    pm2 stop metabot
+  fi
+}
+
+_svc_restart() {
+  _write_restart_breadcrumb
+  if _is_windows_nssm; then
+    nssm restart MetaBot 2>/dev/null || { warn "NSSM restart failed. Run 'nssm status MetaBot' to check."; return 1; }
+  else
+    pm2 restart metabot
+  fi
+}
+
+_svc_status() {
+  if _is_windows_nssm; then
+    nssm status MetaBot 2>/dev/null || echo "Unknown"
+  else
+    pm2 describe metabot
+  fi
+}
+
+_svc_logs() {
+  if _is_windows_nssm; then
+    local logfile="${METABOT_HOME:-$HOME/metabot}/logs/metabot.log"
+    if [[ -f "$logfile" ]]; then
+      tail -f "$logfile"
+    else
+      error "Log file not found: $logfile"
+      return 1
+    fi
+  else
+    pm2 logs metabot "${@}"
+  fi
+}
+
+# Check if service manager is available (NSSM on Windows, PM2 elsewhere)
+_svc_ensure() {
+  if _is_windows_nssm; then
+    if ! nssm status MetaBot &>/dev/null; then
+      error "MetaBot NSSM service not found. Run: nssm install MetaBot ..."
+      return 1
+    fi
+  elif ! command -v pm2 &>/dev/null; then
+    error "PM2 not found. Install: npm install -g pm2"
+    return 1
+  fi
+}
+
+cmd_start()   { _svc_start; }
+cmd_stop()    { _svc_stop; }
+cmd_restart() { _svc_restart; }
+cmd_logs()    { _svc_logs "$@"; }
+cmd_status()  { _svc_status; }
 
 cmd_doctor() {
   local json=false

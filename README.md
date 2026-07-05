@@ -57,6 +57,60 @@ cd ~/metabot && bash install.sh
 
 ---
 
+## Windows 后台服务（NSSM）
+
+在 Windows 上推荐用 [NSSM](https://nssm.cc/) 将 MetaBot 注册为后台服务，替代 PM2，实现开机自启和进程崩溃自动重启。
+
+### 1. 下载 NSSM
+
+从 https://nssm.cc/download 下载最新版，解压后将 `win64/nssm.exe` 放到 PATH 中（如 `C:\Windows`），或放到 `~/.local/bin/`。
+
+### 2. 安装服务
+
+**以管理员身份**打开 PowerShell 或命令提示符，执行：
+
+```powershell
+$NODE = "C:\Program Files\nodejs\node.exe"
+$APP = "C:\Users\<你的用户名>\metabot\dist\index.js"
+$WORKDIR = "C:\Users\<你的用户名>\metabot"
+
+nssm install MetaBot $NODE $APP
+nssm set MetaBot AppDirectory $WORKDIR
+nssm set MetaBot AppStdout "$WORKDIR\logs\metabot.log"
+nssm set MetaBot AppStderr "$WORKDIR\logs\metabot.log"
+nssm start MetaBot
+```
+
+### 3. 非管理员重启（可选）
+
+默认只有管理员能启停服务。一次授权后无需提权：
+
+```powershell
+# 一键授权当前用户控制 MetaBot 服务（需管理员运行一次）
+powershell -Command "
+`$user = whoami
+`$sid = (New-Object System.Security.Principal.NTAccount(`$user)).Translate([System.Security.Principal.SecurityIdentifier]).Value
+`$raw = cmd /c 'sc sdshow MetaBot 2>&1'
+`$sd = (`$raw -split \"`n\" | Where-Object { `$_ -match '^D:\\(' }).Trim()
+`$newAce = \"(A;;RPWPLC;;;`$sid)\"
+if (`$sd -match '^(.*?)S:(.*)$') { `$newSd = `$Matches[1] + `$newAce + 'S:' + `$Matches[2] } else { `$newSd = `$sd + `$newAce }
+cmd /c \"sc sdset MetaBot `$newSd\"
+"
+```
+
+### 4. 管理服务
+
+```powershell
+nssm status MetaBot    # 查看状态
+nssm restart MetaBot   # 重启
+nssm stop MetaBot      # 停止
+nssm start MetaBot     # 启动
+nssm edit MetaBot      # 修改配置（GUI）
+nssm remove MetaBot    # 删除服务
+```
+
+---
+
 ## 🔑 自托管 & 鉴权（个人版）
 
 MetaBot 开箱即是**可自托管的个人版**：本地跑、单 token 鉴权、**不依赖任何 SSO / 企业登录**。

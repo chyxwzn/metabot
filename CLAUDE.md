@@ -95,6 +95,23 @@ lark-cli base records list ...                           # Query bitable
 > 核心区分：**T5T = 我在做什么**（短、可见、状态流）｜**Memory = 为什么这么做**（长、沉淀）｜**Skill = 下次都该怎么做**（给别人用）｜**Agent Bus = 我搞不定，谁来**。
 > 完整 drop-in 版 + HTML one-pager 在 central memory：`metabot memory get 05a558c6-b206-493c-b9ca-04d6c4840a3a`（Markdown）/ `ab55624e-c07c-4df9-a182-3d5f06041a8b`（HTML）。
 
+## Windows Service Management (NSSM)
+
+On Windows, the service is managed with **NSSM** (Non-Sucking Service Manager), not PM2.
+
+```bash
+# Restart the service after build
+nssm restart MetaBot
+
+# View logs
+metabot logs
+
+# Check status
+nssm status MetaBot
+```
+
+See README.md § "Windows 后台服务（NSSM）" for full setup instructions.
+
 ## Guidelines
 
 - **Search before creating** — always check if a file or document already exists before creating new ones.
