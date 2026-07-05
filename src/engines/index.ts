@@ -39,7 +39,7 @@ export function resolveEngineName(config: BotConfigBase): EngineName {
   if (explicit) return explicit;
   const envDefault = process.env.METABOT_ENGINE as EngineName | undefined;
   if (envDefault === 'claude' || envDefault === 'kimi' || envDefault === 'codex') return envDefault;
-  return 'codex';
+  return 'claude';
 }
 
 export type { Engine, EngineName, Executor } from './types.js';

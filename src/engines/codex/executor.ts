@@ -25,24 +25,42 @@ export function resolveCodexPath(explicitPath?: string): string {
   const override = explicitPath || process.env.CODEX_EXECUTABLE_PATH;
   if (override && existsSync(override)) return override;
 
-  try {
-    const cmd = isWindows ? 'where codex' : 'which codex';
-    return execSync(cmd, { encoding: 'utf-8' }).trim().split(/\r?\n/)[0];
-  } catch {
-    if (!isWindows) {
-      const home = os.homedir();
-      for (const candidate of [
+  // Search common Codex install locations
+  const home = os.homedir();
+  const candidates: string[] = isWindows
+    ? [
+        path.join(home, 'AppData', 'Roaming', 'npm', 'codex.cmd'),
+        path.join(home, 'AppData', 'Roaming', 'npm', 'codex'),
+        path.join(home, 'AppData', 'Local', 'npm-cache', '_npx', 'codex'),
+        'codex.cmd',
+        'codex.exe',
+      ]
+    : [
         path.join(home, '.local', 'bin', 'codex'),
         '/usr/local/bin/codex',
         '/usr/bin/codex',
         '/opt/homebrew/bin/codex',
         path.join(home, '.npm-global', 'bin', 'codex'),
-      ]) {
-        if (existsSync(candidate)) return candidate;
-      }
-    }
-    return 'codex';
+      ];
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
   }
+
+  // Fall back to PATH lookup via cmd on Windows, which on POSIX
+  try {
+    const cmd = isWindows ? 'cmd /c where codex 2>nul' : 'which codex 2>/dev/null';
+    const result = execSync(cmd, { encoding: 'utf-8' }).trim();
+    const lines = result.split(/\r?\n/);
+    if (lines[0] && !lines[0].startsWith('INFO:') && !lines[0].includes('Could not find')) {
+      return lines[0];
+    }
+  } catch {
+    // PATH lookup failed — fall through
+  }
+
+  // Last resort: hope it's on PATH
+  return isWindows ? 'codex.cmd' : 'codex';
 }
 
 interface CodexModelMetadata {
