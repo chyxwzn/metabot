@@ -50,11 +50,21 @@ const isWindows = process.platform === 'win32';
 function resolveClaudePath(): string {
   if (process.env.CLAUDE_EXECUTABLE_PATH) return process.env.CLAUDE_EXECUTABLE_PATH;
   try {
-    const cmd = isWindows ? 'where claude' : 'which claude';
-    return execSync(cmd, { encoding: 'utf-8' }).trim().split(/\r?\n/)[0];
+    const cmd = isWindows ? 'cmd /c where claude 2>nul' : 'which claude 2>/dev/null';
+    const result = execSync(cmd, { encoding: 'utf-8' }).trim();
+    const lines = result.split(/\r?\n/);
+    if (lines[0] && !lines[0].startsWith('INFO:') && !lines[0].includes('Could not find')) {
+      return lines[0];
+    }
   } catch {
-    return isWindows ? 'claude' : '/usr/local/bin/claude';
+    // PATH lookup failed — try common locations
   }
+  if (isWindows) {
+    const localBin = path.join(os.homedir(), '.local', 'bin', 'claude.exe');
+    if (fs.existsSync(localBin)) return localBin;
+    return 'claude.cmd';
+  }
+  return '/usr/local/bin/claude';
 }
 
 const CLAUDE_EXECUTABLE = resolveClaudePath();
